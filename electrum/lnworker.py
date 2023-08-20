@@ -224,6 +224,7 @@ LNWALLET_FEATURES = (
     | LnFeatures.OPTION_CHANNEL_TYPE_OPT
     | LnFeatures.OPTION_SCID_ALIAS_OPT
     | LnFeatures.OPTION_SUPPORT_LARGE_CHANNEL_OPT
+    | LnFeatures.OPTION_ELECTRUM_PEERBACKUP_CLIENT_OPT
 )
 
 LNGOSSIP_FEATURES = (
@@ -815,6 +816,8 @@ class LNWallet(LNWorker):
         features = LNWALLET_FEATURES
         if self.config.ACCEPT_ZEROCONF_CHANNELS:
             features |= LnFeatures.OPTION_ZEROCONF_OPT
+        if self.config.LIGHTNING_PEERBACKUP_SERVER:
+            features |= LnFeatures.OPTION_ELECTRUM_PEERBACKUP_SERVER_OPT
         LNWorker.__init__(self, self.node_keypair, features, config=self.config)
         self.lnwatcher = None
         self.lnrater: LNRater = None
@@ -858,7 +861,6 @@ class LNWallet(LNWorker):
         self.hold_invoice_callbacks = {}                # type: Dict[bytes, Callable[[bytes], Awaitable[None]]]
         self.payment_bundles = []                       # lists of hashes. todo:persist
         self.swap_manager = HttpSwapManager(wallet=self.wallet, lnworker=self)
-
 
     def has_deterministic_node_id(self) -> bool:
         return bool(self.db.get('lightning_xprv'))
@@ -1041,7 +1043,8 @@ class LNWallet(LNWorker):
             label = self.wallet.get_label_for_rhash(key)
             if not label and direction == PaymentDirection.FORWARDING:
                 label = _('Forwarding')
-            preimage = self.get_preimage(payment_hash).hex()
+            preimage = self.get_preimage(payment_hash)
+            preimage = preimage.hex() if preimage else None
             item = {
                 'type': 'payment',
                 'label': label,

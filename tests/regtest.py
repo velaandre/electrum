@@ -123,6 +123,7 @@ class TestLightningJIT(TestLightning):
             'lightning_listen': 'localhost:9735',
             'lightning_forward_payments': 'true',
             'accept_zeroconf_channels': 'true',
+            'lightning_peerbackup_server': 'true',
         },
         'carol':{
         }

@@ -167,6 +167,9 @@ class MockLNWallet(Logger, EventListener, NetworkRetryManager[LNPeerAddr]):
         self.features |= LnFeatures.OPTION_TRAMPOLINE_ROUTING_OPT_ELECTRUM
         self.features |= LnFeatures.OPTION_CHANNEL_TYPE_OPT
         self.features |= LnFeatures.OPTION_SCID_ALIAS_OPT
+        self.features |= LnFeatures.OPTION_ELECTRUM_PEERBACKUP_SERVER_OPT
+        self.features |= LnFeatures.OPTION_ELECTRUM_PEERBACKUP_CLIENT_OPT
+
         self.pending_payments = defaultdict(asyncio.Future)
         for chan in chans:
             chan.lnworker = self

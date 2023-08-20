@@ -29,6 +29,7 @@ class HTLCManager:
             log[REMOTE] = deepcopy(initial)
             log[LOCAL]['unacked_updates'] = {}
             log[LOCAL]['was_revoke_last'] = False
+            log[LOCAL]['is_rev_ok'] = True
 
         # maybe bootstrap fee_updates if initial_feerate was provided
         if initial_feerate is not None:
@@ -167,11 +168,12 @@ class HTLCManager:
         self.log[LOCAL]['ctn'] += 1
         self._set_revack_pending(LOCAL, False)
         self.log[LOCAL]['was_revoke_last'] = True
-        # htlcs
+        # htlcs proposed by remote, update locked_in in remote_ctx
         for htlc_id in self._maybe_active_htlc_ids[REMOTE]:
             ctns = self.log[REMOTE]['locked_in'][htlc_id]
             if ctns[REMOTE] is None and ctns[LOCAL] <= self.ctn_latest(LOCAL):
                 ctns[REMOTE] = self.ctn_latest(REMOTE) + 1
+        # htlcs proposed by local, update settles/fails in remote_ctx
         for log_action in ('settles', 'fails'):
             for htlc_id in self._maybe_active_htlc_ids[LOCAL]:
                 ctns = self.log[LOCAL][log_action].get(htlc_id, None)
@@ -179,34 +181,40 @@ class HTLCManager:
                 if ctns[REMOTE] is None and ctns[LOCAL] <= self.ctn_latest(LOCAL):
                     ctns[REMOTE] = self.ctn_latest(REMOTE) + 1
         self._update_maybe_active_htlc_ids()
-        # fee updates
+        # fee updates proposed by remote: update remote_ctn
         for k, fee_update in list(self.log[REMOTE]['fee_updates'].items()):
             if fee_update.ctn_remote is None and fee_update.ctn_local <= self.ctn_latest(LOCAL):
                 fee_update.ctn_remote = self.ctn_latest(REMOTE) + 1
 
     @with_lock
     def recv_rev(self) -> None:
+        is_rev_ok = self.log[LOCAL]['is_rev_ok']
+        next_local_ctn = self.ctn_latest(LOCAL) + 1 if is_rev_ok else self.ctn_latest(LOCAL)
+
         self.log[REMOTE]['ctn'] += 1
         self._set_revack_pending(REMOTE, False)
-        # htlcs
+        # htlcs proposed by local, update locked_in in local_ctx
         for htlc_id in self._maybe_active_htlc_ids[LOCAL]:
             ctns = self.log[LOCAL]['locked_in'][htlc_id]
             if ctns[LOCAL] is None and ctns[REMOTE] <= self.ctn_latest(REMOTE):
-                ctns[LOCAL] = self.ctn_latest(LOCAL) + 1
+                ctns[LOCAL] = next_local_ctn
+        # htlcs proposed by remote, update settles/fails in local_ctx
         for log_action in ('settles', 'fails'):
             for htlc_id in self._maybe_active_htlc_ids[REMOTE]:
                 ctns = self.log[REMOTE][log_action].get(htlc_id, None)
                 if ctns is None: continue
                 if ctns[LOCAL] is None and ctns[REMOTE] <= self.ctn_latest(REMOTE):
-                    ctns[LOCAL] = self.ctn_latest(LOCAL) + 1
+                    ctns[LOCAL] = next_local_ctn
         self._update_maybe_active_htlc_ids()
-        # fee updates
+        # fee updates proposed by local
         for k, fee_update in list(self.log[LOCAL]['fee_updates'].items()):
             if fee_update.ctn_local is None and fee_update.ctn_remote <= self.ctn_latest(REMOTE):
-                fee_update.ctn_local = self.ctn_latest(LOCAL) + 1
+                fee_update.ctn_local = next_local_ctn
 
         # no need to keep local update raw msgs anymore, they have just been ACKed.
         self.log[LOCAL]['unacked_updates'].pop(self.log[REMOTE]['ctn'], None)
+        # reset this
+        self.log[LOCAL]['is_rev_ok'] = True
 
     @with_lock
     def _update_maybe_active_htlc_ids(self) -> None:
