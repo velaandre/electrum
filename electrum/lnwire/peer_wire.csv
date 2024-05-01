@@ -144,7 +144,6 @@ tlvtype,commitment_signed_tlvs,peerbackup,1
 tlvdata,commitment_signed_tlvs,peerbackup,signature,signature,
 tlvtype,commitment_signed_tlvs,time_commitment,2
 tlvdata,commitment_signed_tlvs,time_commitment,timestamp,u64,
-tlvdata,commitment_signed_tlvs,time_commitment,local_ctn,u64,
 tlvdata,commitment_signed_tlvs,time_commitment,remote_ctn,u64,
 tlvdata,commitment_signed_tlvs,time_commitment,signature,signature,
 msgtype,revoke_and_ack,133
@@ -157,7 +156,6 @@ tlvdata,revoke_and_ack_tlvs,peerbackup,signature,signature,
 tlvtype,revoke_and_ack_tlvs,time_commitment,2
 tlvdata,revoke_and_ack_tlvs,time_commitment,timestamp,u64,
 tlvdata,revoke_and_ack_tlvs,time_commitment,local_ctn,u64,
-tlvdata,revoke_and_ack_tlvs,time_commitment,remote_ctn,u64,
 tlvdata,revoke_and_ack_tlvs,time_commitment,signature,signature,
 msgtype,update_fee,134
 msgdata,update_fee,channel_id,channel_id,
@@ -171,9 +169,15 @@ msgdata,channel_reestablish,my_current_per_commitment_point,point,
 msgdata,channel_reestablish,tlvs,channel_reestablish_tlvs,
 tlvtype,channel_reestablish_tlvs,your_local_peerbackup,100
 tlvdata,channel_reestablish_tlvs,your_local_peerbackup,signature,signature,
+tlvdata,channel_reestablish_tlvs,your_local_peerbackup,local_ctn,u64,
+tlvdata,channel_reestablish_tlvs,your_local_peerbackup,timestamp,u64,
+tlvdata,channel_reestablish_tlvs,your_local_peerbackup,time_signature,signature,
 tlvdata,channel_reestablish_tlvs,your_local_peerbackup,state,byte,...
 tlvtype,channel_reestablish_tlvs,your_remote_peerbackup,101
 tlvdata,channel_reestablish_tlvs,your_remote_peerbackup,signature,signature,
+tlvdata,channel_reestablish_tlvs,your_remote_peerbackup,remote_ctn,u64,
+tlvdata,channel_reestablish_tlvs,your_remote_peerbackup,timestamp,u64,
+tlvdata,channel_reestablish_tlvs,your_remote_peerbackup,time_signature,signature,
 tlvdata,channel_reestablish_tlvs,your_remote_peerbackup,state,byte,...
 msgtype,announcement_signatures,259
 msgdata,announcement_signatures,channel_id,channel_id,
