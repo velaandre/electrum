@@ -1777,9 +1777,7 @@ class Channel(AbstractChannel):
         # payment_basepoint: not always here, sure why.
         # see tests.regtest.TestLightningJIT.test_just_in_time
         state['local_config']['payment_basepoint'].pop('privkey', None)
-
         state['local_config'].pop('per_commitment_secret_seed')
-        # encrypt seed (todo)
         # remove peerbackup signature
         state.pop('their_signed_local_state', None)
         state.pop('their_signed_remote_state', None)
@@ -1811,8 +1809,10 @@ class Channel(AbstractChannel):
         state['log']['1']['revack_pending'] = False
         state['log']['-1']['revack_pending'] = True
 
-        channel_seed = state['local_config'].pop('channel_seed')
-        state['local_config']['encrypted_seed'] = channel_seed
+        # encrypt seed in local_config
+        channel_seed = bytes.fromhex(state['local_config'].pop('channel_seed'))
+        encrypted_seed = self.lnworker.encrypt_channel_seed(channel_seed)
+        state['local_config']['encrypted_seed'] = encrypted_seed.hex()
 
         state.pop('state') # can be OPEN or SHUTDOWN
         state.pop('alias', None)
@@ -1924,13 +1924,17 @@ class Channel(AbstractChannel):
         return state2
 
     def get_our_signed_peerbackup(self, owner) -> dict:
+        """client method"""
         state = self.get_our_peerbackup()
         state = self._filter_peerbackup(state, owner, True)
         if owner == LOCAL:
             state.pop('revocation_store')
+        else:
+            state['remote_config']['encrypted_seed'] = None
         return state
 
     def get_their_signed_peerbackup(self, owner) -> dict:
+        """server method"""
         state = self.get_their_peerbackup()
         state = self._filter_peerbackup(state, owner, False)
         if owner == REMOTE:
@@ -1941,7 +1945,7 @@ class Channel(AbstractChannel):
         return state
 
     @classmethod
-    def decode_peerbackup(cls, peerbackup_bytes: dict) -> bytes:
+    def decode_peerbackup(cls, peerbackup_bytes: bytes) -> dict:
         return json.loads(peerbackup_bytes.decode("utf8"))
 
     @classmethod
@@ -2121,8 +2125,8 @@ class Channel(AbstractChannel):
         #channel_id = self.channel_id.hex()
         #assert channel_id in channels
         local_config = state['local_config']
-        encrypted_seed = local_config.pop('encrypted_seed')
-        channel_seed = bytes.fromhex(encrypted_seed)
+        encrypted_seed = bytes.fromhex(local_config.pop('encrypted_seed'))
+        channel_seed = lnworker.decrypt_channel_seed(encrypted_seed)
         local_config['channel_seed'] = channel_seed.hex()
         local_config['funding_locked_received'] = True
         node = BIP32Node.from_rootseed(channel_seed, xtype='standard')

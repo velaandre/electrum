@@ -147,6 +147,7 @@ class MockLNWallet(Logger, EventListener, NetworkRetryManager[LNPeerAddr]):
         Logger.__init__(self)
         NetworkRetryManager.__init__(self, max_retry_delay_normal=1, init_retry_delay_normal=1)
         self.node_keypair = local_keypair
+        self.backup_key = os.urandom(32)
         self.payment_secret_key = os.urandom(256) # does not need to be deterministic in tests
         self._user_dir = tempfile.mkdtemp(prefix="electrum-lnpeer-test-")
         self.config = SimpleConfig({}, read_user_dir_function=lambda: self._user_dir)
@@ -315,6 +316,20 @@ class MockLNWallet(Logger, EventListener, NetworkRetryManager[LNPeerAddr]):
     save_forwarding_failure = LNWallet.save_forwarding_failure
     get_forwarding_failure = LNWallet.get_forwarding_failure
     maybe_cleanup_forwarding = LNWallet.maybe_cleanup_forwarding
+
+    def encrypt_channel_seed(self, seed):
+        # values hardcoded in create_channel_state
+        if seed == b'\01'*32:
+            return b'\x02'*32
+        elif seed == b'\x03'*32:
+            return b'\x04'*32
+
+    def decrypt_channel_seed(self, seed):
+        # values hardcoded in create_channel_state
+        if seed == b'\02'*32:
+            return b'\x01'*32
+        elif seed == b'\x04'*32:
+            return b'\x03'*32
 
 
 class MockTransport:

@@ -1391,6 +1391,12 @@ class LNWallet(LNWorker):
         #       (not have the 16 byte MAC). Otherwise, the latter would be preferable.
         return chacha20_encrypt(key=self.backup_key, data=data, nonce=nonce)
 
+    def encrypt_channel_seed(self, seed: bytes) -> bytes:
+        return chacha20_encrypt(key=self.backup_key, data=seed, nonce=bytes(8))
+
+    def decrypt_channel_seed(self, encrypted_data: bytes) -> bytes:
+        return chacha20_decrypt(key=self.backup_key, data=encrypted_data, nonce=bytes(8))
+
     def mktx_for_open_channel(
             self, *,
             coins: Sequence[PartialTxInput],

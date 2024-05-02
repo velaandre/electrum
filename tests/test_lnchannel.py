@@ -45,7 +45,8 @@ from . import ElectrumTestCase
 one_bitcoin_in_msat = bitcoin.COIN * 1000
 
 
-def create_channel_state(funding_txid, funding_index, funding_sat, is_initiator,
+def create_channel_state(our_channel_seed, their_encrypted_seed,
+                         funding_txid, funding_index, funding_sat, is_initiator,
                          local_amount, remote_amount, privkeys, other_pubkeys,
                          seed, cur, nex, other_node_id, l_dust, r_dust, l_csv,
                          r_csv):
@@ -57,6 +58,7 @@ def create_channel_state(funding_txid, funding_index, funding_sat, is_initiator,
             "short_channel_id":channel_id[:8],
             "funding_outpoint":lnpeer.Outpoint(funding_txid, funding_index),
             "remote_config":lnpeer.RemoteConfig(
+                encrypted_seed=their_encrypted_seed,
                 payment_basepoint=other_pubkeys[0],
                 multisig_key=other_pubkeys[1],
                 htlc_basepoint=other_pubkeys[2],
@@ -76,10 +78,9 @@ def create_channel_state(funding_txid, funding_index, funding_sat, is_initiator,
                 announcement_bitcoin_sig=b'',
                 current_commitment_signature=None,
                 current_htlc_signatures=None,
-                encrypted_seed=None,
             ),
             "local_config":lnpeer.LocalConfig(
-                channel_seed = None,
+                channel_seed=our_channel_seed,
                 payment_basepoint=privkeys[0],
                 multisig_key=privkeys[1],
                 htlc_basepoint=privkeys[2],
@@ -154,9 +155,15 @@ def create_test_channels(*, feerate=6000, local_msat=None, remote_msat=None,
         int.from_bytes(lnutil.get_per_commitment_secret_from_seed(
             bob_seed, lnutil.RevocationStore.START_INDEX), "big"))
 
+    alice_channel_seed = b'\x01'*32
+    alice_encrypted_seed = b'\x02'*32
+    bob_channel_seed = b'\x03'*32
+    bob_encrypted_seed = b'\x04'*32
+
     alice, bob = (
         lnchannel.Channel(
             create_channel_state(
+                alice_channel_seed, bob_encrypted_seed,
                 funding_txid, funding_index, funding_sat, True, local_amount,
                 remote_amount, alice_privkeys, bob_pubkeys, alice_seed, None,
                 bob_first, other_node_id=bob_pubkey, l_dust=200, r_dust=1300,
@@ -166,6 +173,7 @@ def create_test_channels(*, feerate=6000, local_msat=None, remote_msat=None,
             initial_feerate=feerate),
         lnchannel.Channel(
             create_channel_state(
+                bob_channel_seed, alice_encrypted_seed,
                 funding_txid, funding_index, funding_sat, False, remote_amount,
                 local_amount, bob_privkeys, alice_pubkeys, bob_seed, None,
                 alice_first, other_node_id=alice_pubkey, l_dust=1300, r_dust=200,

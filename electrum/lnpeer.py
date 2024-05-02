@@ -803,8 +803,8 @@ class Peer(Logger):
             }
 
         if self.is_peerbackup_client():
-            # TODO: encrypt
-            open_channel_tlvs['encrypted_seed'] = { 'seed': local_config.channel_seed }
+            encrypted_seed = self.lnworker.encrypt_channel_seed(local_config.channel_seed)
+            open_channel_tlvs['encrypted_seed'] = { 'seed': encrypted_seed }
 
         # store the temp id now, so that it is recognized for e.g. 'error' messages
         # TODO: this is never cleaned up; the dict grows unbounded until disconnect
@@ -1080,7 +1080,8 @@ class Peer(Logger):
             }
 
         if self.is_peerbackup_client():
-            accept_channel_tlvs['encrypted_seed'] = { 'seed': local_config.channel_seed }
+            encrypted_seed = self.lnworker.encrypt_channel_seed(local_config.channel_seed)
+            accept_channel_tlvs['encrypted_seed'] = { 'seed': encrypted_seed }
 
         self.send_message(
             'accept_channel',
