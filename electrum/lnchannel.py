@@ -1739,7 +1739,9 @@ class Channel(AbstractChannel):
         return s
 
     def receive_new_peerbackup(self, signature:bytes, owner: HTLCOwner):
-        peerbackup_bytes = self.get_their_peerbackup_bytes(owner)
+        peerbackup_with_timestamps = self.get_their_signed_peerbackup(owner)
+        peerbackup = self.remove_timestamps(peerbackup_with_timestamps)
+        peerbackup_bytes = self.encode_peerbackup(peerbackup)
         sighash = sha256d(peerbackup_bytes)
         pubkey = self.config[REMOTE].multisig_key.pubkey
         if not ECPubkey(pubkey).ecdsa_verify(signature, sighash):
@@ -1756,6 +1758,7 @@ class Channel(AbstractChannel):
         else:
             self.logger.info(f'receive_new_peerbackup {owner}: good signature')
 
+        peerbackup_bytes = self.encode_peerbackup(peerbackup_with_timestamps)
         if owner == REMOTE:
             self.storage['their_signed_remote_state'] = peerbackup_bytes.hex()
             self.storage['their_signature_remote_state'] = signature.hex()
@@ -1900,8 +1903,6 @@ class Channel(AbstractChannel):
             # rm adds that are not locked in
             adds = log[htlc_proposer]['adds']
             for htlc_id in list(adds.keys()):
-                # suppress timestamps
-                adds[htlc_id][4] = 0
                 if htlc_id not in log[htlc_proposer]['locked_in']:
                     adds.pop(htlc_id)
 
@@ -1912,8 +1913,17 @@ class Channel(AbstractChannel):
         state.pop('local_config' if owner == REMOTE  else 'remote_config')
         return state
 
+    def remove_timestamps(self, state) -> dict:
+        import copy
+        state2 = copy.deepcopy(state)
+        log = state2['log']
+        for htlc_proposer in ['-1', '1']:
+            adds = log[htlc_proposer]['adds']
+            for htlc_id in list(adds.keys()):
+                adds[htlc_id][4] = 0
+        return state2
+
     def get_our_signed_peerbackup(self, owner) -> dict:
-        """client"""
         state = self.get_our_peerbackup()
         state = self._filter_peerbackup(state, owner, True)
         if owner == LOCAL:
@@ -1921,7 +1931,6 @@ class Channel(AbstractChannel):
         return state
 
     def get_their_signed_peerbackup(self, owner) -> dict:
-        """server"""
         state = self.get_their_peerbackup()
         state = self._filter_peerbackup(state, owner, False)
         if owner == REMOTE:
@@ -1931,16 +1940,18 @@ class Channel(AbstractChannel):
             state.pop('revocation_store')
         return state
 
-    def get_our_peerbackup_bytes(self, owner) -> bytes:
-        """ client """
-        return bytes(json.dumps(self.get_our_signed_peerbackup(owner), sort_keys=True), "utf8")
+    @classmethod
+    def decode_peerbackup(cls, peerbackup_bytes: dict) -> bytes:
+        return json.loads(peerbackup_bytes.decode("utf8"))
 
-    def get_their_peerbackup_bytes(self, owner) -> bytes:
-        return bytes(json.dumps(self.get_their_signed_peerbackup(owner), sort_keys=True), "utf8")
+    @classmethod
+    def encode_peerbackup(cls, peerbackup: dict) -> bytes:
+        return bytes(json.dumps(peerbackup, sort_keys=True), "utf8")
 
     def get_our_peerbackup_signature(self, owner):
-        """ client """
-        peerbackup_bytes = self.get_our_peerbackup_bytes(owner)
+        peerbackup_with_timestamps = self.get_our_signed_peerbackup(owner)
+        peerbackup = self.remove_timestamps(peerbackup_with_timestamps)
+        peerbackup_bytes = self.encode_peerbackup(peerbackup)
         sighash = sha256d(peerbackup_bytes)
         privkey = self.config[LOCAL].multisig_key.privkey
         signature = ecc.ECPrivkey(privkey).ecdsa_sign(sighash, sigencode=ecc.ecdsa_sig64_from_r_and_s)
@@ -1960,18 +1971,18 @@ class Channel(AbstractChannel):
 
     def verify_peerbackup_signatures(self, peerbackup_bytes, local_signature, remote_signature):
         pubkey = self.config[LOCAL].multisig_key.pubkey
-        local_peerbackup = json.loads(peerbackup_bytes)
+        local_peerbackup = self.decode_peerbackup(peerbackup_bytes)
         local_peerbackup.pop('revocation_store')
         local_peerbackup.pop('remote_config')
         local_peerbackup['log'].pop('-1')
-        local_peerbackup_bytes = bytes(json.dumps(local_peerbackup, sort_keys=True), "utf8")
+        local_peerbackup_bytes = self.encode_peerbackup(local_peerbackup)
         local_sighash = sha256d(local_peerbackup_bytes)
         if not ECPubkey(pubkey).ecdsa_verify(local_signature, local_sighash):
             raise Exception(f'incorrect peerbackup signature')
-        remote_peerbackup = json.loads(peerbackup_bytes)
+        remote_peerbackup = self.decode_peerbackup(peerbackup_bytes)
         remote_peerbackup.pop('local_config')
         remote_peerbackup['log'].pop('1')
-        remote_peerbackup_bytes = bytes(json.dumps(remote_peerbackup, sort_keys=True), "utf8")
+        remote_peerbackup_bytes = self.encode_peerbackup(remote_peerbackup)
         remote_sighash = sha256d(remote_peerbackup_bytes)
         if not ECPubkey(pubkey).ecdsa_verify(remote_signature, remote_sighash):
             raise Exception(f'incorrect peerbackup signature')
@@ -1984,8 +1995,8 @@ class Channel(AbstractChannel):
 
     @classmethod
     def merge_peerbackup_bytes(cls, local_peerbackup_bytes, remote_peerbackup_bytes):
-        local_peerbackup = json.loads(local_peerbackup_bytes)
-        remote_peerbackup = json.loads(remote_peerbackup_bytes)
+        local_peerbackup = cls.decode_peerbackup(local_peerbackup_bytes)
+        remote_peerbackup = cls.decode_peerbackup(remote_peerbackup_bytes)
         ##
         local_peerbackup['revocation_store'] = remote_peerbackup['revocation_store']
         local_peerbackup['remote_config'] = remote_peerbackup['remote_config']
@@ -2050,7 +2061,7 @@ class Channel(AbstractChannel):
             assert max_local + 1 == local_ctn
             log['1']['is_rev_ok'] = False
 
-        return bytes(json.dumps(local_peerbackup, sort_keys=True), "utf8")
+        return cls.encode_peerbackup(local_peerbackup)
 
     def _hash_timetuple(self, ctn, timestamp):
         timetuple = (
@@ -2083,6 +2094,8 @@ class Channel(AbstractChannel):
 
     def verify_peerbackup(self, owner, peerbackup):
         peerbackup_bytes = peerbackup['state']
+        state = self.decode_peerbackup(peerbackup_bytes)
+        peerbackup_bytes = self.encode_peerbackup(self.remove_timestamps(state))
         signature = peerbackup['signature']
         sighash = sha256d(peerbackup_bytes)
         pubkey = self.config[LOCAL].multisig_key.pubkey
@@ -2103,7 +2116,7 @@ class Channel(AbstractChannel):
     @classmethod
     def from_peerbackup(cls, data_bytes: bytes, lnworker):
         from .lnutil import BIP32Node, generate_keypair, LnKeyFamily
-        state = json.loads(data_bytes.decode('utf8'))
+        state = cls.decode_peerbackup(data_bytes)
         channels = lnworker.db.get_dict("channels")
         #channel_id = self.channel_id.hex()
         #assert channel_id in channels
