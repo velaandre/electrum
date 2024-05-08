@@ -2053,8 +2053,8 @@ class Channel(AbstractChannel):
         # detect whether local ctn was reached
         # todo: add test for this. make more efficient
         max_locked_in = max([-1] + [d.get('1', -1) for htlc_id, d in log['1']['locked_in'].items()])
-        max_settles = max([-1] + [d.get('1', -1) for htlc_id, d in log['-1']['locked_in'].items()])
-        max_fails = max([-1] + [d.get('1', -1) for htlc_id, d in log['-1']['locked_in'].items()])
+        max_settles = max([-1] + [d.get('1', -1) for htlc_id, d in log['-1']['settles'].items()])
+        max_fails = max([-1] + [d.get('1', -1) for htlc_id, d in log['-1']['fails'].items()])
         max_fee = max([-1] + [d.get('1', -1) for htlc_id, d in log['1']['fee_updates'].items()])
         max_local = max(max_locked_in, max_settles, max_fails, max_fee)
         local_ctn = log['1']['ctn']
