@@ -1767,57 +1767,46 @@ class Channel(AbstractChannel):
             self.storage['their_signature_local_state'] = signature.hex()
 
     def get_our_peerbackup(self) -> dict:
-        # convert storeddict to dict
+        # convert StoredDict to dict
         with self.db_lock:
             state = json.loads(json.dumps(self.storage, cls=util.MyEncoder))
         # remove private keys
         for key in ['delayed_basepoint', 'revocation_basepoint', 'multisig_key', 'htlc_basepoint']:
             state['local_config'][key].pop('privkey')
-
         # payment_basepoint: not always here, sure why.
         # see tests.regtest.TestLightningJIT.test_just_in_time
         state['local_config']['payment_basepoint'].pop('privkey', None)
         state['local_config'].pop('per_commitment_secret_seed')
-        # remove peerbackup signature
-        state.pop('their_signed_local_state', None)
-        state.pop('their_signed_remote_state', None)
-        state.pop('their_signature_local_state', None)
-        state.pop('their_signature_remote_state', None)
-        state.pop('our_local_state_hash', None)
-        state.pop('our_remote_state_hash', None)
-        state.pop('local_time_commitment', None)
-        state.pop('remote_time_commitment', None)
-        state.pop('unfulfilled_htlcs') # todo: make sure we can fail unfulfilled htlcs after restore
-        # remove alias.
-        state.pop('local_scid_alias', None)
-        state.pop('funding_inputs', None) # only initiator has this
-        state.pop('has_onchain_backup', None)
-        state.pop('onion_keys')
-        state.pop('peer_network_addresses', None)
-        state.pop('remote_update', None)
         state['local_config'].pop('funding_locked_received')
-
-        state['log']['1'].pop('is_rev_ok', None)
-        state['log']['1'].pop('was_revoke_last')
-        state['log']['1'].pop('unacked_updates')
-
-        # next_htlc_id can be reconstructed
-        state['log']['1'].pop('next_htlc_id')
-        state['log']['-1'].pop('next_htlc_id')
-
-        # set revack pending
-        state['log']['1']['revack_pending'] = False
-        state['log']['-1']['revack_pending'] = True
-
         # encrypt seed in local_config
         channel_seed = bytes.fromhex(state['local_config'].pop('channel_seed'))
         encrypted_seed = self.lnworker.encrypt_channel_seed(channel_seed)
         state['local_config']['encrypted_seed'] = encrypted_seed.hex()
+        state['log']['1'].pop('is_rev_ok', None)
+        state['log']['1'].pop('was_revoke_last')
+        state['log']['1'].pop('unacked_updates')
+        # next_htlc_id can be reconstructed
+        state['log']['1'].pop('next_htlc_id')
+        state['log']['-1'].pop('next_htlc_id')
+        # set revack pending
+        state['log']['1'].pop('revack_pending')
+        state['log']['-1'].pop('revack_pending')
+        # create peerbackup
+        peerbackup = {
+            'channel_id': state['channel_id'],
+            'node_id': state['node_id'],
+            'short_channel_id': state['short_channel_id'],
+            'channel_state': state['channel_type'],
+            'constraints': state['constraints'],
+            'data_loss_protect_remote_pcp': state['data_loss_protect_remote_pcp'],
+            'funding_outpoint': state['funding_outpoint'],
+            'local_config': state['local_config'],
+            'remote_config': state['remote_config'],
+            'log': state['log'],
+            'revocation_store': state['revocation_store'],
+        }
+        return peerbackup
 
-        state.pop('state') # can be OPEN or SHUTDOWN
-        state.pop('alias', None)
-        state.pop('init_timestamp', None)
-        return state
 
     def get_their_peerbackup(self) -> dict:
         def flip_values(d:dict, key_a, key_b):
@@ -1840,9 +1829,6 @@ class Channel(AbstractChannel):
                 flip_values(d[k], 'ctn_local', 'ctn_remote')
         state['constraints']['is_initiator'] = not state['constraints']['is_initiator']
         state['node_id'] = self.lnworker.node_keypair.pubkey.hex()
-        # set revack_pending
-        state['log']['1']['revack_pending'] = False
-        state['log']['-1']['revack_pending'] = True
         return state
 
     def _filter_peerbackup(self, state, owner, is_client: bool) -> dict:
@@ -2050,6 +2036,9 @@ class Channel(AbstractChannel):
         for owner in ['-1', '1']:
             htlc_ids = [int(x) for x in log[owner]['locked_in'].keys()]
             log[owner]['next_htlc_id'] = max(htlc_ids) + 1 if htlc_ids else 0
+        # set revack_pending
+        log['1']['revack_pending'] = False
+        log['-1']['revack_pending'] = True
         # detect whether local ctn was reached
         # todo: add test for this. make more efficient
         max_locked_in = max([-1] + [d.get('1', -1) for htlc_id, d in log['1']['locked_in'].items()])
