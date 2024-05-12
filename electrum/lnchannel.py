@@ -1782,13 +1782,12 @@ class Channel(AbstractChannel):
         channel_seed = bytes.fromhex(state['local_config'].pop('channel_seed'))
         encrypted_seed = self.lnworker.encrypt_channel_seed(channel_seed)
         state['local_config']['encrypted_seed'] = encrypted_seed.hex()
-        state['log']['1'].pop('is_rev_ok', None)
         state['log']['1'].pop('was_revoke_last')
         state['log']['1'].pop('unacked_updates')
         # next_htlc_id can be reconstructed
         state['log']['1'].pop('next_htlc_id')
         state['log']['-1'].pop('next_htlc_id')
-        # set revack pending
+        # revack pending will be reconstructed
         state['log']['1'].pop('revack_pending')
         state['log']['-1'].pop('revack_pending')
         # create peerbackup
@@ -1796,7 +1795,7 @@ class Channel(AbstractChannel):
             'channel_id': state['channel_id'],
             'node_id': state['node_id'],
             'short_channel_id': state['short_channel_id'],
-            'channel_state': state['channel_type'],
+            'channel_type': state['channel_type'],
             'constraints': state['constraints'],
             'data_loss_protect_remote_pcp': state['data_loss_protect_remote_pcp'],
             'funding_outpoint': state['funding_outpoint'],
@@ -1806,7 +1805,6 @@ class Channel(AbstractChannel):
             'revocation_store': state['revocation_store'],
         }
         return peerbackup
-
 
     def get_their_peerbackup(self) -> dict:
         def flip_values(d:dict, key_a, key_b):
@@ -2039,20 +2037,6 @@ class Channel(AbstractChannel):
         # set revack_pending
         log['1']['revack_pending'] = False
         log['-1']['revack_pending'] = True
-        # detect whether local ctn was reached
-        # todo: add test for this. make more efficient
-        max_locked_in = max([-1] + [d.get('1', -1) for htlc_id, d in log['1']['locked_in'].items()])
-        max_settles = max([-1] + [d.get('1', -1) for htlc_id, d in log['-1']['settles'].items()])
-        max_fails = max([-1] + [d.get('1', -1) for htlc_id, d in log['-1']['fails'].items()])
-        max_fee = max([-1] + [d.get('1', -1) for htlc_id, d in log['1']['fee_updates'].items()])
-        max_local = max(max_locked_in, max_settles, max_fails, max_fee)
-        local_ctn = log['1']['ctn']
-        print('max_local', max_local, local_ctn)
-        if max_local == local_ctn:
-            log['1']['is_rev_ok'] = True
-        else:
-            assert max_local + 1 == local_ctn
-            log['1']['is_rev_ok'] = False
 
         return cls.encode_peerbackup(local_peerbackup)
 
