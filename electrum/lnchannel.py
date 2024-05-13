@@ -2026,19 +2026,17 @@ class Channel(AbstractChannel):
                 with open('merged_peerbackup_remote', 'w+', encoding='utf-8') as f:
                     json.dump(remote_peerbackup, f, indent=4, sort_keys=True)
             raise Exception('merge_peerbackup error')
-
-        peerbackup = local_peerbackup
-        peerbackup['state'] = 'OPEN'
-        # restore next_htlc_id
-        log = peerbackup['log']
-        for owner in ['-1', '1']:
-            htlc_ids = [int(x) for x in log[owner]['locked_in'].keys()]
-            log[owner]['next_htlc_id'] = max(htlc_ids) + 1 if htlc_ids else 0
-        # set revack_pending
-        log['1']['revack_pending'] = False
-        log['-1']['revack_pending'] = True
-
         return cls.encode_peerbackup(local_peerbackup)
+
+    def get_their_peerbackup_for_reestablish(self):
+        local_peerbackup = self.storage.get('their_signed_local_state')
+        remote_peerbackup = self.storage.get('their_signed_remote_state')
+        if not local_peerbackup or not remote_peerbackup:
+            return
+        local_peerbackup_bytes = bytes.fromhex(local_peerbackup)
+        remote_peerbackup_bytes = bytes.fromhex(remote_peerbackup)
+        peerbackup_bytes = self.merge_peerbackup_bytes(local_peerbackup_bytes, remote_peerbackup_bytes)
+        return peerbackup_bytes
 
     def _hash_timetuple(self, ctn, timestamp):
         timetuple = (
@@ -2069,26 +2067,25 @@ class Channel(AbstractChannel):
         # store new one
         self.storage[key] = (ctn, timestamp, signature)
 
-    def verify_peerbackup(self, owner, peerbackup):
-        peerbackup_bytes = peerbackup['state']
+    def verify_peerbackup(self, owner, peerbackup_bytes, signature):
         state = self.decode_peerbackup(peerbackup_bytes)
-        peerbackup_bytes = self.encode_peerbackup(self.remove_timestamps(state))
-        signature = peerbackup['signature']
+        # filter the state
+        state = self._filter_peerbackup(state, owner, True)
+        state = self.remove_timestamps(state)
+        if owner == LOCAL:
+            state.pop('revocation_store')
+        peerbackup_bytes = self.encode_peerbackup(state)
         sighash = sha256d(peerbackup_bytes)
-        pubkey = self.config[LOCAL].multisig_key.pubkey
-        if not ECPubkey(pubkey).ecdsa_verify(signature, sighash):
-            raise Exception(f'incorrect peerbackup signature: {owner}')
         key = 'our_local_state_hash' if owner == LOCAL else 'our_remote_state_hash'
         our_sighash = bytes.fromhex(self.storage.get(key, ''))
         if not our_sighash:
             self.logger.info('cannot compare sighashes')
         elif sighash != our_sighash:
             raise Exception('received peerbackup does not match our last sent')
-        # verify time commitment
-        ctn = peerbackup['local_ctn' if owner == LOCAL else 'remote_ctn']
-        timestamp = peerbackup['timestamp']
-        time_signature = peerbackup['time_signature']
-        self.receive_time_commitment(owner, ctn, timestamp, time_signature)
+        pubkey = self.config[LOCAL].multisig_key.pubkey
+        if not ECPubkey(pubkey).ecdsa_verify(signature, sighash):
+            raise Exception(f'incorrect peerbackup signature: {owner}')
+        self.logger.info(f'good peerbackup signature {owner}')
 
     @classmethod
     def from_peerbackup(cls, data_bytes: bytes, lnworker):
@@ -2116,6 +2113,16 @@ class Channel(AbstractChannel):
 
         state['log']['1']['was_revoke_last'] = False
         state['log']['1']['unacked_updates'] = {}
+        # restore next_htlc_id
+        log = state['log']
+        for owner in ['-1', '1']:
+            htlc_ids = [int(x) for x in log[owner]['locked_in'].keys()]
+            log[owner]['next_htlc_id'] = max(htlc_ids) + 1 if htlc_ids else 0
+        # set revack_pending
+        log['1']['revack_pending'] = False
+        log['-1']['revack_pending'] = True
+        # assume OPEN
+        state['state'] = 'OPEN'
 
         channel_id = state["channel_id"]
         # this does type conversion
