@@ -1895,6 +1895,10 @@ class Channel(AbstractChannel):
                 d[k].pop('ctn_local' if owner == REMOTE else 'ctn_remote')
 
         state.pop('local_config' if owner == REMOTE  else 'remote_config')
+        # revocation store is not part of local
+        if owner == LOCAL:
+            state.pop('revocation_store')
+
         return state
 
     def remove_timestamps(self, state) -> dict:
@@ -1911,9 +1915,7 @@ class Channel(AbstractChannel):
         """client method"""
         state = self.get_our_peerbackup()
         state = self._filter_peerbackup(state, owner, True)
-        if owner == LOCAL:
-            state.pop('revocation_store')
-        else:
+        if owner == REMOTE:
             state['remote_config']['encrypted_seed'] = None
         return state
 
@@ -1924,8 +1926,6 @@ class Channel(AbstractChannel):
         if owner == REMOTE:
             state['remote_config']['encrypted_seed'] = None
             state['revocation_store'] = self.get_their_revocation_store()
-        else:
-            state.pop('revocation_store')
         return state
 
     @classmethod
@@ -2072,8 +2072,6 @@ class Channel(AbstractChannel):
         # filter the state
         state = self._filter_peerbackup(state, owner, True)
         state = self.remove_timestamps(state)
-        if owner == LOCAL:
-            state.pop('revocation_store')
         peerbackup_bytes = self.encode_peerbackup(state)
         sighash = sha256d(peerbackup_bytes)
         key = 'our_local_state_hash' if owner == LOCAL else 'our_remote_state_hash'
