@@ -290,7 +290,7 @@ def _parse_msgtype_intvalue_for_onion_wire(value: str) -> int:
 
 class LNSerializer:
 
-    def __init__(self, *, for_onion_wire: bool = False):
+    def __init__(self, *, name:str):
         # TODO msg_type could be 'int' everywhere...
         self.msg_scheme_from_type = {}  # type: Dict[bytes, List[Sequence[str]]]
         self.msg_type_from_name = {}  # type: Dict[str, bytes]
@@ -299,10 +299,7 @@ class LNSerializer:
         self.in_tlv_stream_get_record_type_from_name = {}  # type: Dict[str, Dict[str, int]]
         self.in_tlv_stream_get_record_name_from_type = {}  # type: Dict[str, Dict[int, str]]
 
-        if for_onion_wire:
-            path = os.path.join(os.path.dirname(__file__), "lnwire", "onion_wire.csv")
-        else:
-            path = os.path.join(os.path.dirname(__file__), "lnwire", "peer_wire.csv")
+        path = os.path.join(os.path.dirname(__file__), "lnwire", name + ".csv")
         with open(path, newline='') as f:
             csvreader = csv.reader(f)
             for row in csvreader:
@@ -310,7 +307,7 @@ class LNSerializer:
                 if row[0] == "msgtype":
                     # msgtype,<msgname>,<value>[,<option>]
                     msg_type_name = row[1]
-                    if for_onion_wire:
+                    if name in [ 'onion_wire', 'peerbackup_wire']:
                         msg_type_int = _parse_msgtype_intvalue_for_onion_wire(str(row[2]))
                     else:
                         msg_type_int = int(row[2])
@@ -517,9 +514,9 @@ class LNSerializer:
         return msg_type_name, parsed
 
 
-_inst = LNSerializer()
+_inst = LNSerializer(name='peer_wire')
 encode_msg = _inst.encode_msg
 decode_msg = _inst.decode_msg
 
-
-OnionWireSerializer = LNSerializer(for_onion_wire=True)
+OnionWireSerializer = LNSerializer(name='onion_wire')
+PeerBackupWireSerializer = LNSerializer(name='peerbackup_wire')

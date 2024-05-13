@@ -19,6 +19,7 @@
 # THE SOFTWARE.
 import enum
 import os
+import io
 from collections import namedtuple, defaultdict
 import binascii
 import json
@@ -61,6 +62,7 @@ from .lnsweep import create_sweeptxs_for_our_ctx, create_sweeptxs_for_their_ctx
 from .lnsweep import create_sweeptx_for_their_revoked_htlc, SweepInfo
 from .lnhtlc import HTLCManager
 from .lnmsg import encode_msg, decode_msg
+from .lnmsg import PeerBackupWireSerializer
 from .address_synchronizer import TX_HEIGHT_LOCAL
 from .lnutil import CHANNEL_OPENING_TIMEOUT
 from .lnutil import ChannelBackupStorage, ImportedChannelBackupStorage, OnchainChannelBackupStorage
@@ -1752,8 +1754,7 @@ class Channel(AbstractChannel):
                 filename = "their_local_state" if owner == LOCAL else "their_remote_state"
                 path = self.diagnostic_name() + '_' + filename + '_%d'%ctn
                 with open(path, "w") as f:
-                    our_state = json.loads(peerbackup_bytes.decode('utf8'))
-                    f.write(json.dumps(our_state, sort_keys=True, indent=2))
+                    f.write(json.dumps(peerbackup, cls=util.MyEncoder, sort_keys=True, indent=2))
                 self.logger.info(f'state saved in {path}')
             raise Exception(f'incorrect signature')
         else:
@@ -1769,6 +1770,70 @@ class Channel(AbstractChannel):
         if ctn is not None and ctn > self.hm.ctn_latest(owner):
             ctn = None
         return ctn
+
+    @classmethod
+    def convert_config_to_payload(self, remote_config, ctn):
+        a = {
+            'htlc_basepoint': bytes.fromhex(remote_config['htlc_basepoint']['pubkey']),
+            'payment_basepoint': bytes.fromhex(remote_config['payment_basepoint']['pubkey']),
+            'revocation_basepoint': bytes.fromhex(remote_config['revocation_basepoint']['pubkey']),
+            'delayed_basepoint': bytes.fromhex(remote_config['delayed_basepoint']['pubkey']),
+            'multisig_key': bytes.fromhex(remote_config['multisig_key']['pubkey']),
+            'to_self_delay': remote_config['to_self_delay'],
+            'dust_limit_satoshis': remote_config['dust_limit_sat'],
+            'max_htlc_value_in_flight_msat': remote_config['max_htlc_value_in_flight_msat'],
+            'reserve_sat': remote_config['reserve_sat'],
+            'initial_msat': remote_config['initial_msat'],
+            'htlc_minimum_msat': remote_config['htlc_minimum_msat'],
+            'max_accepted_htlcs': remote_config['max_accepted_htlcs'],
+            'upfront_shutdown_script': bytes.fromhex(remote_config['upfront_shutdown_script']),
+            'announcement_node_sig': bytes.fromhex(remote_config['announcement_node_sig']) or bytes(64),
+            'announcement_bitcoin_sig': bytes.fromhex(remote_config['announcement_bitcoin_sig']) or bytes(64),
+        }
+        b = {
+            'ctn': ctn,
+            'current_per_commitment_point': bytes.fromhex(remote_config['current_per_commitment_point']),
+            'next_per_commitment_point': bytes.fromhex(remote_config['next_per_commitment_point']),
+            'current_commitment_signature': bytes.fromhex(remote_config['current_commitment_signature']),
+            'current_htlc_signatures': bytes.fromhex(remote_config['current_htlc_signatures'] or ''),
+        }
+        return a, b
+
+    @classmethod
+    def convert_payload_to_config(self, config, ctx):
+        ctn = ctx['ctn']
+        config2 = {
+            'htlc_basepoint': {'pubkey': config['htlc_basepoint'].hex()},
+            'payment_basepoint': {'pubkey': config['payment_basepoint'].hex()},
+            'revocation_basepoint': {'pubkey': config['revocation_basepoint'].hex()},
+            'delayed_basepoint': {'pubkey':config['delayed_basepoint'].hex()},
+            'multisig_key': {'pubkey':config['multisig_key'].hex()},
+
+            'to_self_delay': config['to_self_delay'],
+            'dust_limit_sat': config['dust_limit_satoshis'],
+            'max_htlc_value_in_flight_msat': config['max_htlc_value_in_flight_msat'],
+            'reserve_sat': config['reserve_sat'],
+            'initial_msat': config['initial_msat'],
+            'htlc_minimum_msat': config['htlc_minimum_msat'],
+            'max_accepted_htlcs': config['max_accepted_htlcs'],
+
+            'upfront_shutdown_script': config['upfront_shutdown_script'].hex(),
+
+            'current_per_commitment_point': ctx['current_per_commitment_point'].hex(),
+            'next_per_commitment_point': ctx['next_per_commitment_point'].hex(),
+            'current_commitment_signature': ctx['current_commitment_signature'].hex(),
+            'current_htlc_signatures': ctx['current_htlc_signatures'].hex(),
+        }
+        
+        announcement_node_sig = config['announcement_node_sig']
+        announcement_bitcoin_sig = config['announcement_bitcoin_sig']
+        if announcement_node_sig == bytes(64):
+            announcement_node_sig = b''
+        if announcement_bitcoin_sig == bytes(64):
+            announcement_bitcoin_sig = b''
+        config2['announcement_node_sig'] = announcement_node_sig.hex()
+        config2['announcement_bitcoin_sig'] = announcement_bitcoin_sig.hex()
+        return config2, ctn
 
     def get_our_peerbackup(self) -> dict:
         # convert StoredDict to dict
@@ -1786,7 +1851,7 @@ class Channel(AbstractChannel):
         channel_seed = bytes.fromhex(state['local_config'].pop('channel_seed'))
         encrypted_seed = self.lnworker.encrypt_channel_seed(channel_seed)
         state['local_config']['encrypted_seed'] = encrypted_seed.hex()
-        # convert log to a list of htlcs
+        # convert log to a list of HtlcUpdate
         log = self.hm.log
         htlc_log = {LOCAL:{}, REMOTE:{}}
         fee_updates_log = {LOCAL:{}, REMOTE:{}}
@@ -1820,10 +1885,10 @@ class Channel(AbstractChannel):
         peerbackup = {
             'channel_id': state['channel_id'],
             'node_id': state['node_id'],
-            'short_channel_id': state['short_channel_id'],
+            #'short_channel_id': state['short_channel_id'],
             'channel_type': state['channel_type'],
             'constraints': state['constraints'],
-            'data_loss_protect_remote_pcp': state['data_loss_protect_remote_pcp'],
+            #'data_loss_protect_remote_pcp': state['data_loss_protect_remote_pcp'],
             'funding_outpoint': state['funding_outpoint'],
             'local_config': state['local_config'],
             'remote_config': state['remote_config'],
@@ -1843,6 +1908,7 @@ class Channel(AbstractChannel):
             d[key_b] = a
         # flip values of log and config
         state = self.get_our_peerbackup()
+
         flip_values(state, 'local_config', 'remote_config')
         flip_values(state, 'local_ctn', 'remote_ctn')
 
@@ -1930,9 +1996,49 @@ class Channel(AbstractChannel):
 
     @classmethod
     def decode_peerbackup(cls, peerbackup_bytes: bytes) -> dict:
-        state = json.loads(peerbackup_bytes.decode("utf8"))
+        payload = PeerBackupWireSerializer.read_tlv_stream(
+            fd=io.BytesIO(peerbackup_bytes),
+            tlv_stream_name="payload")
+        state = {
+            'channel_id': payload['channel_id']['channel_id'].hex(),
+            'channel_type': ChannelType.from_bytes(payload['channel_type']['type'], byteorder='big'),
+            'node_id': payload['node_id']['node_id'].hex(),
+            'constraints': payload['constraints'],
+            'funding_outpoint': {
+                'txid': payload['funding_outpoint']['txid'].hex(),
+                'output_index': payload['funding_outpoint']['output_index'],
+            }
+        }
 
-        fee_updates_log_bytes = bytes.fromhex(state.pop('fee_updates_log'))
+        if 'revocation_store' in payload:
+            buckets = {}
+            buckets_bytes = payload['revocation_store']['buckets']
+            while buckets_bytes:
+                chunk = buckets_bytes[0:42]
+                buckets_bytes = buckets_bytes[42:]
+                with io.BytesIO(bytes(chunk)) as s:
+                    key = int.from_bytes(s.read(2), byteorder="big")
+                    _hash = s.read(32)
+                    _index = int.from_bytes(s.read(8), byteorder="big")
+                buckets[key] = (_hash.hex(), _index)
+
+            state['revocation_store'] = {
+                'index': payload['revocation_store']['index'],
+                'buckets': buckets,
+            }
+        if 'remote_config' in payload:
+            a, b = cls.convert_payload_to_config(payload['remote_config'], payload['remote_ctx'])
+            state['remote_config'] = a
+            state['remote_ctn'] = b
+            state['remote_config']['encrypted_seed'] = None
+
+        if 'local_config' in payload:
+            a, b = cls.convert_payload_to_config(payload['local_config'], payload['local_ctx'])
+            state['local_config'] = a
+            state['local_ctn'] = b
+            state['local_config']['encrypted_seed'] = payload['encrypted_seed']['seed'].hex()
+
+        fee_updates_log_bytes = payload['fee_updates_log']['fee_updates_log']
         fee_updates_log = {LOCAL:{}, REMOTE:{}}
         while fee_updates_log_bytes:
             chunk = fee_updates_log_bytes[0:33]
@@ -1941,7 +2047,7 @@ class Channel(AbstractChannel):
             fee_updates_log[proposer][fee_update_id] = fee_update
         state['fee_updates_log'] = fee_updates_log
 
-        htlc_log_bytes = bytes.fromhex(state.pop('htlc_log'))
+        htlc_log_bytes = payload['htlc_log']['htlc_log']
         htlc_log = {LOCAL:{}, REMOTE:{}}
         while htlc_log_bytes:
             chunk = htlc_log_bytes[0:113]
@@ -1953,24 +2059,88 @@ class Channel(AbstractChannel):
         return state
 
     @classmethod
-    def encode_peerbackup(cls, peerbackup: dict, blank_timestamps=False) -> bytes:
-        peerbackup = deepcopy(peerbackup)
-
+    def encode_peerbackup(cls, peerbackup_o: dict, blank_timestamps=False) -> bytes:
+        # todo: add version number
+        peerbackup = deepcopy(peerbackup_o)
+        #
+        channel_id = peerbackup.pop('channel_id')
+        channel_type = ChannelType(peerbackup.pop('channel_type')).to_bytes_minimal()
+        node_id = bytes.fromhex(peerbackup.pop('node_id'))
+        constraints = peerbackup.pop('constraints') 
+        local_ctn = peerbackup.pop('local_ctn', None)
+        remote_ctn = peerbackup.pop('remote_ctn', None)
+        local_config = peerbackup.pop('local_config', None)
+        remote_config = peerbackup.pop('remote_config', None)
+        funding_outpoint = peerbackup.pop('funding_outpoint')
+        revocation_store = peerbackup.pop('revocation_store', None)
         htlc_log = peerbackup.pop('htlc_log')
+        fee_updates_log = peerbackup.pop('fee_updates_log')
+        assert len(peerbackup) == 0, peerbackup
+        # convert to bytes
         htlc_log_bytes = b''
         for proposer in [LOCAL, REMOTE]:
             for htlc_id, htlc_update in list(htlc_log[proposer].items()):
                 htlc_log_bytes += htlc_update.to_bytes(proposer, blank_timestamps)
-        peerbackup['htlc_log'] = htlc_log_bytes.hex()
-
-        fee_updates_log = peerbackup.pop('fee_updates_log')
         fee_updates_log_bytes = b''
         for proposer in [LOCAL, REMOTE]:
             for fee_update_id, fee_update in list(fee_updates_log[proposer].items()):
                 fee_updates_log_bytes += fee_update.to_bytes(proposer, fee_update_id)
-        peerbackup['fee_updates_log'] = fee_updates_log_bytes.hex()
 
-        return bytes(json.dumps(peerbackup, sort_keys=True, cls=util.MyEncoder), "utf8")
+        payload = {
+            'channel_id': {'channel_id': bytes.fromhex(channel_id) },
+            'channel_type': {'type': channel_type},
+            'node_id': {'node_id': node_id},
+            'htlc_log': {'htlc_log': htlc_log_bytes},
+            'fee_updates_log': {'fee_updates_log': fee_updates_log_bytes},
+            'constraints': constraints,
+            'funding_outpoint': {
+                'txid': bytes.fromhex(funding_outpoint['txid']),
+                'output_index': funding_outpoint['output_index'],
+            },
+        }
+
+        if revocation_store:
+            buckets_bytes = b''
+            buckets = revocation_store['buckets']
+            for k, v in sorted(buckets.items()):
+                _hash, _index = v
+                r = int.to_bytes(int(k), length=2, byteorder="big", signed=False)
+                r += bytes.fromhex(_hash)
+                r += int.to_bytes(_index, length=8, byteorder="big", signed=False)
+                buckets_bytes += r
+
+            payload['revocation_store'] = {
+                'index': revocation_store['index'],
+                'buckets': buckets_bytes,
+            }
+        if remote_config:
+            a, b = cls.convert_config_to_payload(remote_config, remote_ctn)
+            payload['remote_config'] = a
+            payload['remote_ctx'] = b
+
+        if local_config:
+            a, b = cls.convert_config_to_payload(local_config, local_ctn)
+            payload['local_config'] = a
+            payload['local_ctx'] = b
+            encrypted_seed = local_config['encrypted_seed']
+            payload['encrypted_seed'] = {'seed': bytes.fromhex(encrypted_seed)}
+
+        payload_fd = io.BytesIO()
+        PeerBackupWireSerializer.write_tlv_stream(
+            fd=payload_fd,
+            tlv_stream_name="payload",
+            **payload)
+        payload_bytes = payload_fd.getvalue()
+        decoded = cls.decode_peerbackup(payload_bytes)
+        if not blank_timestamps and decoded != peerbackup_o:
+            for k, v in peerbackup_o.items():
+                v2 = decoded[k]
+                if v2 != v:
+                    print(k)
+                    print(v)
+                    print(v2)
+                    raise
+        return payload_bytes
 
     def get_our_peerbackup_signature(self, owner):
         peerbackup = self.get_our_signed_peerbackup(owner)
@@ -1985,8 +2155,7 @@ class Channel(AbstractChannel):
             filename = "our_local_state" if owner == LOCAL else "our_remote_state"
             path = self.diagnostic_name() + '_' + filename + '_%d'%ctn
             with open(path, "w") as f:
-                our_state = json.loads(peerbackup_bytes.decode('utf8'))
-                f.write(json.dumps(our_state, sort_keys=True, indent=2))
+                f.write(json.dumps(peerbackup, cls=util.MyEncoder, sort_keys=True, indent=2))
                 self.logger.info(f'wrote {path}')
         s = 'our_local_state_hash' if owner == LOCAL else 'our_remote_state_hash'
         self.storage[s] = sighash.hex()
@@ -2022,6 +2191,7 @@ class Channel(AbstractChannel):
         remote_peerbackup = cls.decode_peerbackup(remote_peerbackup_bytes)
         ##
         local_peerbackup['revocation_store'] = remote_peerbackup['revocation_store']
+        #
         local_peerbackup['remote_config'] = remote_peerbackup['remote_config']
         remote_peerbackup['local_config'] = local_peerbackup['local_config']
         #
@@ -2207,4 +2377,6 @@ class Channel(AbstractChannel):
         log['-1']['revack_pending'] = True
         # assume OPEN
         state['state'] = 'OPEN'
+        state['short_channel_id'] = None
+        state['data_loss_protect_remote_pcp'] = {}
         return state

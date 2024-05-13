@@ -255,6 +255,9 @@ class FeeUpdateNotStored:
         self.ctn_local = self.ctn_remote
         self.ctn_remote = a
 
+    def to_json(self):
+        return (self.rate, self.ctn_local, self.ctn_remote)
+
     def to_bytes(self, proposer, fee_update_id):
         def ctn_to_bytes(x):
             if x is None:
@@ -1788,6 +1791,21 @@ class HtlcUpdate:
         self.remote_locked_in = v.remote_locked_in
         self.remote_settle = v.remote_settle
         self.remote_fail = v.remote_fail
+
+    def to_json(self):
+        return (
+            self.htlc_id,
+            self.amount_msat,
+            self.payment_hash.hex(),
+            self.cltv_abs,
+            self.timestamp,
+            self.local_locked_in,
+            self.local_settle,
+            self.local_fail,
+            self.remote_locked_in,
+            self.remote_settle,
+            self.remote_fail,
+        )
 
     def to_bytes(self, proposer, blank_timestamps=False):
         def ctn_to_bytes(x):
