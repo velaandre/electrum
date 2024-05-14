@@ -1759,12 +1759,9 @@ class Channel(AbstractChannel):
             self.logger.info(f'receive_new_peerbackup {owner}: good signature')
 
         peerbackup_bytes = self.encode_peerbackup(peerbackup_with_timestamps)
-        if owner == REMOTE:
-            self.storage['their_signed_remote_state'] = peerbackup_bytes.hex()
-            self.storage['their_signature_remote_state'] = signature.hex()
-        else:
-            self.storage['their_signed_local_state'] = peerbackup_bytes.hex()
-            self.storage['their_signature_local_state'] = signature.hex()
+        ctn = peerbackup['log']['1' if owner == LOCAL else '-1']['ctn']
+        key = 'their_signed_remote_peerbackup' if owner == REMOTE else 'their_signed_local_peerbackup'
+        self.storage[key] = ctn, peerbackup_bytes.hex(), signature.hex()
 
     def get_our_peerbackup(self) -> dict:
         # convert StoredDict to dict
@@ -1977,8 +1974,8 @@ class Channel(AbstractChannel):
         return local_sighash, remote_sighash
 
     def get_their_peerbackup_signature(self, owner):
-        s = 'their_signature_local_state' if owner == LOCAL else 'their_signature_remote_state'
-        their_signature = self.storage.get(s) or 64*'00'
+        key = 'their_signed_local_peerbackup' if owner == LOCAL else 'their_signed_remote_peerbackup'
+        ctn, peerbackup, their_signature = self.storage[key]
         return bytes.fromhex(their_signature)
 
     @classmethod
@@ -2029,32 +2026,48 @@ class Channel(AbstractChannel):
         return cls.encode_peerbackup(local_peerbackup)
 
     def get_their_peerbackup_for_reestablish(self):
-        local_peerbackup = self.storage.get('their_signed_local_state')
-        remote_peerbackup = self.storage.get('their_signed_remote_state')
-        if not local_peerbackup or not remote_peerbackup:
+        their_signed_local_peerbackup = self.storage.get('their_signed_local_peerbackup')
+        their_signed_remote_peerbackup = self.storage.get('their_signed_remote_peerbackup')
+        if not their_signed_local_peerbackup or not their_signed_remote_peerbackup:
             return
+        local_ctn, local_peerbackup, local_sig = their_signed_local_peerbackup
+        remote_ctn, remote_peerbackup, remote_sig = their_signed_remote_peerbackup
         local_peerbackup_bytes = bytes.fromhex(local_peerbackup)
         remote_peerbackup_bytes = bytes.fromhex(remote_peerbackup)
         peerbackup_bytes = self.merge_peerbackup_bytes(local_peerbackup_bytes, remote_peerbackup_bytes)
         return peerbackup_bytes
 
-    def _hash_timetuple(self, ctn, timestamp):
+    def time_commitment_hash(self, owner, ctn, timestamp):
         timetuple = (
-            int.to_bytes(timestamp, length=8, byteorder="little", signed=False)
+            int.to_bytes(int(owner==LOCAL), length=1, byteorder="little", signed=False)
+            + int.to_bytes(timestamp, length=8, byteorder="little", signed=False)
             + int.to_bytes(ctn, length=4, byteorder="little", signed=False)
         )
         return sha256d(timetuple)
 
+    def get_their_last_signed_peerbackup(self, owner):
+        key = 'their_signed_local_peerbackup' if owner == LOCAL else 'their_signed_remote_peerbackup'
+        return self.storage.get(key)
+
     def get_time_commitment(self, owner):
-        timestamp = int(100*time.time()) # 10ms precision
-        ctn = self.get_latest_ctn(owner)
-        sighash = self._hash_timetuple(ctn, timestamp)
+        peerbackup = self.get_their_last_signed_peerbackup(owner)
+        if peerbackup:
+            ctn, peerbackup, their_signature = peerbackup
+        else:
+            ctn = 0
+        timestamp = int(1000*time.time()) # 1ms precision
+        sighash = self.time_commitment_hash(owner, ctn, timestamp)
         privkey = self.config[LOCAL].multisig_key.privkey
         signature = ecc.ECPrivkey(privkey).ecdsa_sign(sighash, sigencode=ecc.ecdsa_sig64_from_r_and_s)
+        self.logger.info(f'sending time commitment with {owner.name} {ctn} {timestamp}')
         return ctn, timestamp, signature
 
     def receive_time_commitment(self, owner, ctn, timestamp, signature):
-        # update locally stored
+        # verify signature
+        self.logger.info(f'receive_time_commitment {owner.name} {ctn} {timestamp}')
+        sighash = self.time_commitment_hash(owner, ctn, timestamp)
+        assert ECPubkey(self.config[REMOTE].multisig_key.pubkey).ecdsa_verify(signature, sighash)
+        # compare to previous
         key = 'local_time_commitment' if owner == LOCAL else 'remote_time_commitment'
         tc = self.storage.get(key)
         if tc:
@@ -2062,9 +2075,7 @@ class Channel(AbstractChannel):
             old_ctn, old_timestamp, old_signature = tc
             assert ctn >= old_ctn
             assert timestamp >= old_timestamp
-            sighash = self._hash_timetuple(ctn, timestamp)
-            assert ECPubkey(self.config[REMOTE].multisig_key.pubkey).ecdsa_verify(signature, sighash)
-        # store new one
+        # update locally stored commitment
         self.storage[key] = (ctn, timestamp, signature)
 
     def verify_peerbackup(self, owner, peerbackup_bytes, signature):
@@ -2084,6 +2095,7 @@ class Channel(AbstractChannel):
         if not ECPubkey(pubkey).ecdsa_verify(signature, sighash):
             raise Exception(f'incorrect peerbackup signature: {owner}')
         self.logger.info(f'good peerbackup signature {owner}')
+        return state['log']['1' if owner==LOCAL else '-1']['ctn']
 
     @classmethod
     def from_peerbackup(cls, data_bytes: bytes, lnworker):

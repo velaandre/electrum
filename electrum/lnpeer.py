@@ -1299,11 +1299,12 @@ class Peer(Logger):
                 if peerbackup:
                     # verify signatures
                     peerbackup_bytes = peerbackup['state']
-                    chan.verify_peerbackup(REMOTE, peerbackup_bytes, peerbackup['remote_signature'])
-                    chan.verify_peerbackup(LOCAL, peerbackup_bytes, peerbackup['local_signature'])
+                    remote_ctn = chan.verify_peerbackup(REMOTE, peerbackup_bytes, peerbackup['remote_signature'])
+                    local_ctn = chan.verify_peerbackup(LOCAL, peerbackup_bytes, peerbackup['local_signature'])
+                    self.logger.info(f'verified peerbackup {local_ctn, remote_ctn}')
                     # verify time commitments
-                    chan.receive_time_commitment(LOCAL, peerbackup['local_ctn'], peerbackup['local_timestamp'], peerbackup['local_time_signature'])
-                    chan.receive_time_commitment(REMOTE, peerbackup['remote_ctn'], peerbackup['remote_timestamp'], peerbackup['remote_time_signature'])
+                    chan.receive_time_commitment(LOCAL, local_ctn, peerbackup['local_timestamp'], peerbackup['local_time_signature'])
+                    chan.receive_time_commitment(REMOTE, remote_ctn, peerbackup['remote_timestamp'], peerbackup['remote_time_signature'])
 
             fut.set_result((we_must_resend_revoke_and_ack, their_next_local_ctn))
             # Block processing of further incoming messages until we finished our part of chan-reest.
@@ -1337,10 +1338,8 @@ class Peer(Logger):
                     'state': peerbackup_bytes,
                     'local_signature': chan.get_their_peerbackup_signature(LOCAL),
                     'remote_signature': chan.get_their_peerbackup_signature(REMOTE),
-                    'local_ctn': local_ctn, # should be in the state
                     'local_timestamp': local_timestamp,
                     'local_time_signature': local_signature,
-                    'remote_ctn': remote_ctn, # should be in the state
                     'remote_timestamp': remote_timestamp,
                     'remote_time_signature': remote_signature,
                 }
@@ -1628,9 +1627,8 @@ class Peer(Logger):
             peerbackup_signature = chan.get_our_peerbackup_signature(owner)
             tlvs['peerbackup'] = {'signature': peerbackup_signature}
         if self.is_peerbackup_server():
-            ctn, timestamp, signature = chan.get_time_commitment(owner)
+            ctn, timestamp, signature = chan.get_time_commitment(-owner)
             tlvs['time_commitment'] = {
-                'local_ctn' if owner == LOCAL else 'remote_ctn': ctn,
                 'timestamp': timestamp,
                 'signature': signature
             }
@@ -1812,7 +1810,8 @@ class Peer(Logger):
             chan.receive_new_peerbackup(peerbackup_sig, REMOTE)
         if self.is_peerbackup_client():
             tc = payload['commitment_signed_tlvs']['time_commitment']
-            chan.receive_time_commitment(REMOTE, tc['remote_ctn'], tc['timestamp'], tc['signature'])
+            ctn = chan.get_oldest_unrevoked_ctn(LOCAL)
+            chan.receive_time_commitment(LOCAL, ctn, tc['timestamp'], tc['signature'])
 
         self.send_revoke_and_ack(chan)
         self.received_commitsig_event.set()
@@ -2364,7 +2363,8 @@ class Peer(Logger):
             chan.receive_new_peerbackup(peerbackup_sig, LOCAL)
         if self.is_peerbackup_client():
             tc = payload['revoke_and_ack_tlvs']['time_commitment']
-            chan.receive_time_commitment(LOCAL, tc['local_ctn'], tc['timestamp'], tc['signature'])
+            ctn = chan.get_oldest_unrevoked_ctn(REMOTE) - 1
+            chan.receive_time_commitment(REMOTE, ctn, tc['timestamp'], tc['signature'])
 
         self.lnworker.save_channel(chan)
         self.maybe_send_commitment(chan)
