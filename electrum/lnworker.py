@@ -44,6 +44,7 @@ from .crypto import sha256
 from .bip32 import BIP32Node
 from .util import bfh, InvoiceError, resolve_dns_srv, is_ip_address, log_exceptions
 from .crypto import chacha20_encrypt, chacha20_decrypt
+from .crypto import chacha20_poly1305_encrypt, chacha20_poly1305_decrypt
 from .util import ignore_exceptions, make_aiohttp_session
 from .util import timestamp_to_datetime, random_shuffled_copy
 from .util import MyEncoder, is_private_netaddress, UnrelatedTransactionException
@@ -1392,10 +1393,10 @@ class LNWallet(LNWorker):
         return chacha20_encrypt(key=self.backup_key, data=data, nonce=nonce)
 
     def encrypt_channel_seed(self, seed: bytes) -> bytes:
-        return chacha20_encrypt(key=self.backup_key, data=seed, nonce=bytes(8))
+        return chacha20_poly1305_encrypt(key=self.backup_key, data=seed, nonce=bytes(12))
 
     def decrypt_channel_seed(self, encrypted_data: bytes) -> bytes:
-        return chacha20_decrypt(key=self.backup_key, data=encrypted_data, nonce=bytes(8))
+        return chacha20_poly1305_decrypt(key=self.backup_key, data=encrypted_data, nonce=bytes(12))
 
     def mktx_for_open_channel(
             self, *,
