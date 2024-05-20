@@ -244,54 +244,12 @@ class LocalConfig(ChannelConfig):
 class RemoteConfig(ChannelConfig):
     encrypted_seed = attr.ib(type=bytes, converter=hex_to_bytes)  # type: Optional[bytes]
 
+@stored_in('fee_updates')
 @attr.s
-class FeeUpdateNotStored:
+class FeeUpdate(StoredObject):
     rate = attr.ib(type=int)  # in sat/kw
     ctn_local = attr.ib(default=None, type=int)
     ctn_remote = attr.ib(default=None, type=int)
-
-    def flip(self):
-        a = self.ctn_local
-        self.ctn_local = self.ctn_remote
-        self.ctn_remote = a
-
-    def to_json(self):
-        return (self.rate, self.ctn_local, self.ctn_remote)
-
-    def to_bytes(self, proposer, fee_update_id):
-        def ctn_to_bytes(x):
-            if x is None:
-                x = -1
-            return int.to_bytes(x, length=8, byteorder="big", signed=True)
-        r = b'\x00' if proposer==LOCAL else b'\x01'
-        r += int.to_bytes(fee_update_id, length=8, byteorder="big", signed=False)
-        r += int.to_bytes(self.rate, length=8, byteorder="big", signed=False)
-        r += ctn_to_bytes(self.ctn_local)
-        r += ctn_to_bytes(self.ctn_remote)
-        assert len(r) == 33, len(r)
-        return r
-
-    @classmethod
-    def from_bytes(cls, chunk:bytes):
-        assert len(chunk) == 33
-        def bytes_to_ctn(x):
-            ctn = int.from_bytes(x, byteorder="big", signed=True)
-            if ctn == -1:
-                ctn = None
-            return ctn
-        with io.BytesIO(bytes(chunk)) as s:
-            proposer = LOCAL if s.read(1) == b'\x00' else REMOTE
-            fee_update_id = int.from_bytes(s.read(8), byteorder="big")
-            fee_update = FeeUpdateNotStored(
-                rate = int.from_bytes(s.read(8), byteorder="big"),
-                ctn_local = bytes_to_ctn(s.read(8)),
-                ctn_remote = bytes_to_ctn(s.read(8)),
-            )
-        return proposer, fee_update_id, fee_update
-
-@stored_in('fee_updates')
-class FeeUpdate(StoredObject, FeeUpdateNotStored):
-    pass
 
 @stored_as('constraints')
 @attr.s
@@ -1747,110 +1705,6 @@ class UpdateAddHtlc:
     def to_json(self):
         return (self.amount_msat, self.payment_hash, self.cltv_abs, self.htlc_id, self.timestamp)
 
-@attr.s
-class HtlcUpdate:
-    htlc_id = attr.ib(type=int)
-    amount_msat = attr.ib(type=int)
-    payment_hash = attr.ib(type=bytes)
-    cltv_abs = attr.ib(type=int)
-    timestamp = attr.ib(type=int)
-    local_locked_in = attr.ib(type=int, default=None)
-    local_settle = attr.ib(type=int, default=None)
-    local_fail = attr.ib(type=int, default=None)
-    remote_locked_in = attr.ib(type=int, default=None)
-    remote_settle = attr.ib(type=int, default=None)
-    remote_fail = attr.ib(type=int, default=None)
-
-    def flip(self):
-        a = self.local_locked_in
-        b = self.local_settle
-        c = self.local_fail
-        self.local_locked_in = self.remote_locked_in
-        self.local_settle = self.remote_settle
-        self.local_fail = self.remote_fail
-        self.remote_locked_in = a
-        self.remote_settle = b
-        self.remote_fail = c
-
-    def blank_local(self):
-        self.local_locked_in = None
-        self.local_settle = None
-        self.local_fail = None
-
-    def blank_remote(self):
-        self.remote_locked_in = None
-        self.remote_settle = None
-        self.remote_fail = None
-
-    def update_local(self, v):
-        self.local_locked_in = v.local_locked_in
-        self.local_settle = v.local_settle
-        self.local_fail = v.local_fail
-
-    def update_remote(self, v):
-        self.remote_locked_in = v.remote_locked_in
-        self.remote_settle = v.remote_settle
-        self.remote_fail = v.remote_fail
-
-    def to_json(self):
-        return (
-            self.htlc_id,
-            self.amount_msat,
-            self.payment_hash.hex(),
-            self.cltv_abs,
-            self.timestamp,
-            self.local_locked_in,
-            self.local_settle,
-            self.local_fail,
-            self.remote_locked_in,
-            self.remote_settle,
-            self.remote_fail,
-        )
-
-    def to_bytes(self, proposer, blank_timestamps=False):
-        def ctn_to_bytes(x):
-            if x is None:
-                x = -1
-            return int.to_bytes(x, length=8, byteorder="big", signed=True)
-        r = b'\x00' if proposer==LOCAL else b'\x01'
-        r += int.to_bytes(self.htlc_id, length=8, byteorder="big", signed=False)
-        r += int.to_bytes(self.amount_msat, length=8, byteorder="big", signed=False)
-        r += self.payment_hash
-        r += int.to_bytes(self.cltv_abs, length=8, byteorder="big", signed=False)
-        r += int.to_bytes(0 if blank_timestamps else self.timestamp, length=8, byteorder="big", signed=False)
-        r += ctn_to_bytes(self.local_locked_in)
-        r += ctn_to_bytes(self.local_settle)
-        r += ctn_to_bytes(self.local_fail)
-        r += ctn_to_bytes(self.remote_locked_in)
-        r += ctn_to_bytes(self.remote_settle)
-        r += ctn_to_bytes(self.remote_fail)
-        assert len(r) == 113, len(r)
-        return r
-
-    @classmethod
-    def from_bytes(cls, chunk:bytes):
-        assert len(chunk) == 113
-        def bytes_to_ctn(x):
-            ctn = int.from_bytes(x, byteorder="big", signed=True)
-            if ctn == -1:
-                ctn = None
-            return ctn
-        with io.BytesIO(bytes(chunk)) as s:
-            proposer = LOCAL if s.read(1) == b'\x00' else REMOTE
-            htlc_update = HtlcUpdate(
-                htlc_id = int.from_bytes(s.read(8), byteorder="big"),
-                amount_msat = int.from_bytes(s.read(8), byteorder="big"),
-                payment_hash = s.read(32),
-                cltv_abs = int.from_bytes(s.read(8), byteorder="big"),
-                timestamp = int.from_bytes(s.read(8), byteorder="big"),
-                local_locked_in = bytes_to_ctn(s.read(8)),
-                local_settle = bytes_to_ctn(s.read(8)),
-                local_fail = bytes_to_ctn(s.read(8)),
-                remote_locked_in = bytes_to_ctn(s.read(8)),
-                remote_settle = bytes_to_ctn(s.read(8)),
-                remote_fail = bytes_to_ctn(s.read(8)),
-            )
-        return proposer, htlc_update
 
 class OnionFailureCodeMetaFlag(IntFlag):
     BADONION = 0x8000

@@ -58,7 +58,7 @@ class TestLNMsg(ElectrumTestCase):
 
     def test_read_tlv_stream_tests1(self):
         # from https://github.com/lightningnetwork/lightning-rfc/blob/452a0eb916fedf4c954137b4fd0b61b5002b34ad/01-messaging.md#tlv-decoding-failures
-        lnser = LNSerializer()
+        lnser = LNSerializer(name='peer_wire')
         for tlv_stream_name in ("n1", "n2"):
             with self.subTest(tlv_stream_name=tlv_stream_name):
                 with self.assertRaises(UnexpectedEndOfStream):
@@ -131,7 +131,7 @@ class TestLNMsg(ElectrumTestCase):
 
     def test_read_tlv_stream_tests2(self):
         # from https://github.com/lightningnetwork/lightning-rfc/blob/452a0eb916fedf4c954137b4fd0b61b5002b34ad/01-messaging.md#tlv-decoding-successes
-        lnser = LNSerializer()
+        lnser = LNSerializer(name='peer_wire')
         for tlv_stream_name in ("n1", "n2"):
             with self.subTest(tlv_stream_name=tlv_stream_name):
                 self.assertEqual({}, lnser.read_tlv_stream(fd=io.BytesIO(bfh("")), tlv_stream_name=tlv_stream_name))
@@ -171,7 +171,7 @@ class TestLNMsg(ElectrumTestCase):
 
     def test_read_tlv_stream_tests3(self):
         # from https://github.com/lightningnetwork/lightning-rfc/blob/452a0eb916fedf4c954137b4fd0b61b5002b34ad/01-messaging.md#tlv-stream-decoding-failure
-        lnser = LNSerializer()
+        lnser = LNSerializer(name='peer_wire')
         with self.assertRaises(MsgInvalidFieldOrder):
             lnser.read_tlv_stream(fd=io.BytesIO(bfh("0208000000000000022601012a")), tlv_stream_name="n1")
         with self.assertRaises(MsgInvalidFieldOrder):

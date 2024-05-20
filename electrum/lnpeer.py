@@ -54,6 +54,7 @@ from .json_db import StoredDict
 from .invoices import PR_PAID
 from .simple_config import FEE_LN_ETA_TARGET, FEERATE_PER_KW_MIN_RELAY_LIGHTNING
 from .trampoline import decode_routing_info
+from .peerbackup import PeerBackup
 
 if TYPE_CHECKING:
     from .lnworker import LNGossip, LNWallet
@@ -1203,14 +1204,15 @@ class Peer(Logger):
             peerbackup = msg['channel_reestablish_tlvs'].get('peerbackup')
             if peerbackup:
                 # todo: verify_peerbackup_signature if chan is None
-                self.logger.info('reconstructing channel')
-                state = Channel.state_from_peerbackup(peerbackup['state'], lnworker=self.lnworker)
+                self.logger.info('recreating channel')
+                peerbackup = PeerBackup.from_bytes(peerbackup['state'])
+                channel_state = peerbackup.recreate_channel_state(self.lnworker)
                 # chan can be None, see maybe_resuming
                 if not chan:
-                    channel_id = state["channel_id"]
+                    channel_id = channel_state["channel_id"]
                     channels = self.lnworker.db.get_dict("channels")
-                    # this does type conversion
-                    channels[channel_id] = state
+                    # this converts dict to StoredDict
+                    channels[channel_id] = channel_state
                     storage = channels[channel_id]
                     chan = Channel(storage, lnworker=self.lnworker)
                     self.lnworker.add_new_channel(chan)
