@@ -29,6 +29,8 @@ from .lnutil import UpdateAddHtlc, ChannelType
 from .lnmsg import PeerBackupWireSerializer
 from .lnutil import BIP32Node, generate_keypair, LnKeyFamily
 from .lnhtlc import LOG_TEMPLATE
+from .crypto import sha256
+
 
 # Note: we must reconstruct everything from 2 owners
 #
@@ -46,6 +48,8 @@ from .lnhtlc import LOG_TEMPLATE
 #    ---Rev->         bob: receive_new_peerbackup(their_local)  alice: get_our_signed_peerbackup(local)
 
 
+PEERBACKUP_VERSION = 0
+
 @attr.s
 class HtlcUpdate:
     htlc_id = attr.ib(type=int)
@@ -53,43 +57,39 @@ class HtlcUpdate:
     payment_hash = attr.ib(type=bytes)
     cltv_abs = attr.ib(type=int)
     timestamp = attr.ib(type=int)
-    local_locked_in = attr.ib(type=int, default=None)
-    local_settle = attr.ib(type=int, default=None)
-    local_fail = attr.ib(type=int, default=None)
-    remote_locked_in = attr.ib(type=int, default=None)
-    remote_settle = attr.ib(type=int, default=None)
-    remote_fail = attr.ib(type=int, default=None)
+    is_success = attr.ib(type=bool, default=False)
+    local_ctn_in = attr.ib(type=int, default=None)
+    local_ctn_out = attr.ib(type=int, default=None)
+    remote_ctn_in = attr.ib(type=int, default=None)
+    remote_ctn_out = attr.ib(type=int, default=None)
 
     def flip(self):
-        a = self.local_locked_in
-        b = self.local_settle
-        c = self.local_fail
-        self.local_locked_in = self.remote_locked_in
-        self.local_settle = self.remote_settle
-        self.local_fail = self.remote_fail
-        self.remote_locked_in = a
-        self.remote_settle = b
-        self.remote_fail = c
+        a = self.local_ctn_in
+        b = self.local_ctn_out
+        self.local_ctn_in = self.remote_ctn_in
+        self.local_ctn_out = self.remote_ctn_out
+        self.remote_ctn_in = a
+        self.remote_ctn_out = b
 
     def blank_local(self):
-        self.local_locked_in = None
-        self.local_settle = None
-        self.local_fail = None
+        self.local_ctn_in = None
+        self.local_ctn_out = None
+        if self.remote_ctn_out is None:
+            self.is_success = False
 
     def blank_remote(self):
-        self.remote_locked_in = None
-        self.remote_settle = None
-        self.remote_fail = None
+        self.remote_ctn_in = None
+        self.remote_tn_out = None
+        if self.local_ctn_out is None:
+            self.is_success = False
 
     def update_local(self, v):
-        self.local_locked_in = v.local_locked_in
-        self.local_settle = v.local_settle
-        self.local_fail = v.local_fail
+        self.local_ctn_in = v.local_ctn_in
+        self.local_ctn_out = v.local_ctn_out
 
     def update_remote(self, v):
-        self.remote_locked_in = v.remote_locked_in
-        self.remote_settle = v.remote_settle
-        self.remote_fail = v.remote_fail
+        self.remote_ctn_in = v.remote_ctn_in
+        self.remote_ctn_out = v.remote_ctn_out
 
     def to_json(self):
         return (
@@ -98,12 +98,11 @@ class HtlcUpdate:
             self.payment_hash.hex(),
             self.cltv_abs,
             self.timestamp,
-            self.local_locked_in,
-            self.local_settle,
-            self.local_fail,
-            self.remote_locked_in,
-            self.remote_settle,
-            self.remote_fail,
+            self.is_success,
+            self.local_ctn_in,
+            self.local_ctn_out,
+            self.remote_ctn_in,
+            self.remote_ctn_out,
         )
 
     def to_bytes(self, proposer, blank_timestamps=False):
@@ -117,18 +116,17 @@ class HtlcUpdate:
         r += self.payment_hash
         r += int.to_bytes(self.cltv_abs, length=8, byteorder="big", signed=False)
         r += int.to_bytes(0 if blank_timestamps else self.timestamp, length=8, byteorder="big", signed=False)
-        r += ctn_to_bytes(self.local_locked_in)
-        r += ctn_to_bytes(self.local_settle)
-        r += ctn_to_bytes(self.local_fail)
-        r += ctn_to_bytes(self.remote_locked_in)
-        r += ctn_to_bytes(self.remote_settle)
-        r += ctn_to_bytes(self.remote_fail)
-        assert len(r) == 113, len(r)
+        r += b'\x01' if self.is_success else b'\x00'
+        r += ctn_to_bytes(self.local_ctn_in)
+        r += ctn_to_bytes(self.local_ctn_out)
+        r += ctn_to_bytes(self.remote_ctn_in)
+        r += ctn_to_bytes(self.remote_ctn_out)
+        assert len(r) == 98, len(r)
         return r
 
     @classmethod
     def from_bytes(cls, chunk:bytes):
-        assert len(chunk) == 113
+        assert len(chunk) == 98, len(chunk)
         def bytes_to_ctn(x):
             ctn = int.from_bytes(x, byteorder="big", signed=True)
             if ctn == -1:
@@ -142,12 +140,11 @@ class HtlcUpdate:
                 payment_hash = s.read(32),
                 cltv_abs = int.from_bytes(s.read(8), byteorder="big"),
                 timestamp = int.from_bytes(s.read(8), byteorder="big"),
-                local_locked_in = bytes_to_ctn(s.read(8)),
-                local_settle = bytes_to_ctn(s.read(8)),
-                local_fail = bytes_to_ctn(s.read(8)),
-                remote_locked_in = bytes_to_ctn(s.read(8)),
-                remote_settle = bytes_to_ctn(s.read(8)),
-                remote_fail = bytes_to_ctn(s.read(8)),
+                is_success = bool(s.read(1) == b'\x01'),
+                local_ctn_in = bytes_to_ctn(s.read(8)),
+                local_ctn_out = bytes_to_ctn(s.read(8)),
+                remote_ctn_in = bytes_to_ctn(s.read(8)),
+                remote_ctn_out = bytes_to_ctn(s.read(8)),
             )
         return proposer, htlc_update
 
@@ -235,21 +232,34 @@ class PeerBackup:
         fee_updates_log = {LOCAL:{}, REMOTE:{}}
         for proposer in [LOCAL, REMOTE]:
             for htlc_id, add in log[proposer]['adds'].items():
+                local_ctn_in = chan.hm.get_ctn_if_lower_than_latest(proposer, 'locked_in', htlc_id, LOCAL)
+                local_ctn_settle = chan.hm.get_ctn_if_lower_than_latest(proposer, 'settles', htlc_id, LOCAL)
+                local_ctn_fail = chan.hm.get_ctn_if_lower_than_latest(proposer, 'fails', htlc_id, LOCAL)
+                remote_ctn_in = chan.hm.get_ctn_if_lower_than_latest(proposer, 'locked_in', htlc_id, REMOTE)
+                remote_ctn_settle = chan.hm.get_ctn_if_lower_than_latest(proposer, 'settles', htlc_id, REMOTE)
+                remote_ctn_fail = chan.hm.get_ctn_if_lower_than_latest(proposer, 'fails', htlc_id, REMOTE)
+                if local_ctn_in is None and remote_ctn_in is None:
+                    continue
+                is_success = local_ctn_settle is not None or remote_ctn_settle is not None
+                if is_success:
+                    local_ctn_out = local_ctn_settle
+                    remote_ctn_out = remote_ctn_settle
+                else:
+                    local_ctn_out = local_ctn_fail
+                    remote_ctn_out = remote_ctn_fail
                 htlc_update = HtlcUpdate(
                     amount_msat = add.amount_msat,
                     payment_hash = add.payment_hash,
                     cltv_abs = add.cltv_abs,
                     timestamp = add.timestamp,
                     htlc_id = add.htlc_id,
-                    local_locked_in = chan.get_ctn_below_latest(proposer, 'locked_in', htlc_id, LOCAL),
-                    local_settle = chan.get_ctn_below_latest(proposer, 'settles', htlc_id, LOCAL),
-                    local_fail = chan.get_ctn_below_latest(proposer, 'fails', htlc_id, LOCAL),
-                    remote_locked_in = chan.get_ctn_below_latest(proposer, 'locked_in', htlc_id, REMOTE),
-                    remote_settle = chan.get_ctn_below_latest(proposer, 'settles', htlc_id, REMOTE),
-                    remote_fail = chan.get_ctn_below_latest(proposer, 'fails', htlc_id, REMOTE),
+                    is_success = is_success,
+                    local_ctn_in = local_ctn_in,
+                    local_ctn_out = local_ctn_out,
+                    remote_ctn_in = remote_ctn_in,
+                    remote_ctn_out = remote_ctn_out,
                 )
-                if htlc_update.local_locked_in is not None or htlc_update.remote_locked_in is not None:
-                    htlc_log[proposer][htlc_id] = htlc_update
+                htlc_log[proposer][htlc_id] = htlc_update
             for update_id, f in log[proposer]['fee_updates'].items():
                 fee_update = FeeUpdateNotStored(
                     rate=f.rate,
@@ -355,6 +365,8 @@ class PeerBackup:
         payload = PeerBackupWireSerializer.read_tlv_stream(
             fd=io.BytesIO(peerbackup_bytes),
             tlv_stream_name="payload")
+        version = payload['version']['version']
+        assert version == PEERBACKUP_VERSION
         state = {
             'channel_id': payload['channel_id']['channel_id'].hex(),
             'channel_type': ChannelType.from_bytes(payload['channel_type']['type'], byteorder='big'),
@@ -402,11 +414,11 @@ class PeerBackup:
             fee_updates_log[proposer][fee_update_id] = fee_update
         state['fee_updates_log'] = fee_updates_log
 
-        htlc_log_bytes = payload['htlc_log']['htlc_log']
+        htlc_log_bytes = payload['htlc_log']['active_htlcs']
         htlc_log = {LOCAL:{}, REMOTE:{}}
         while htlc_log_bytes:
-            chunk = htlc_log_bytes[0:113]
-            htlc_log_bytes = htlc_log_bytes[113:]
+            chunk = htlc_log_bytes[0:98]
+            htlc_log_bytes = htlc_log_bytes[98:]
             proposer, htlc_update = HtlcUpdate.from_bytes(chunk)
             htlc_log[proposer][htlc_update.htlc_id] = htlc_update
         state['htlc_log'] = htlc_log
@@ -414,22 +426,30 @@ class PeerBackup:
         return PeerBackup(**state)
 
     def to_bytes(self, blank_timestamps=False) -> bytes:
-        # todo: add version number
         htlc_log_bytes = b''
+        htlc_history_hash = sha256(b'htlc_history')
         for proposer in [LOCAL, REMOTE]:
             for htlc_id, htlc_update in list(self.htlc_log[proposer].items()):
-                htlc_log_bytes += htlc_update.to_bytes(proposer, blank_timestamps)
+                _bytes = htlc_update.to_bytes(proposer, blank_timestamps)
+                htlc_log_bytes += _bytes
+
         fee_updates_log_bytes = b''
         for proposer in [LOCAL, REMOTE]:
             for fee_update_id, fee_update in list(self.fee_updates_log[proposer].items()):
                 fee_updates_log_bytes += fee_update.to_bytes(proposer, fee_update_id)
 
         payload = {
+            'version': {'version': PEERBACKUP_VERSION},
             'channel_id': {'channel_id': bytes.fromhex(self.channel_id)},
             'channel_type': {'type': ChannelType(self.channel_type).to_bytes_minimal()},
             'node_id': {'node_id': bytes.fromhex(self.node_id)},
-            'htlc_log': {'htlc_log': htlc_log_bytes},
-            'fee_updates_log': {'fee_updates_log': fee_updates_log_bytes},
+            'htlc_log': {
+                'htlc_history_hash': htlc_history_hash,
+                'active_htlcs': htlc_log_bytes,
+            },
+            'fee_updates_log': {
+                'fee_updates_log': fee_updates_log_bytes,
+            },
             'constraints': self.constraints,
             'funding_outpoint': {
                 'txid': bytes.fromhex(self.funding_outpoint['txid']),
@@ -483,7 +503,6 @@ class PeerBackup:
         #
         remote_peerbackup.local_ctn = local_peerbackup.local_ctn
         local_peerbackup.remote_ctn = remote_peerbackup.remote_ctn
-        #
         # merge htlc logs
         local_htlc_log = local_peerbackup.htlc_log
         remote_htlc_log = remote_peerbackup.htlc_log
@@ -493,7 +512,6 @@ class PeerBackup:
                 if remote_v:
                     local_v.update_remote(remote_v)
                     local_htlc_log[proposer][htlc_id] = local_v
-
         for proposer in [LOCAL, REMOTE]:
             for htlc_id, remote_v in list(remote_htlc_log[proposer].items()):
                 local_v = local_htlc_log[proposer].get(htlc_id)
@@ -578,7 +596,7 @@ class PeerBackup:
                     v.blank_local()
                 else:
                     v.blank_remote()
-                if v.local_locked_in is None and v.remote_locked_in is None:
+                if v.local_ctn_in is None and v.remote_ctn_in is None:
                     htlc_log[proposer].pop(htlc_id)
         # blank fields
         fee_updates_log = self.fee_updates_log
@@ -625,12 +643,11 @@ class PeerBackup:
             target_log = log[str(int(proposer))]
             for htlc_id, v in htlc_log[proposer].items():
                 target_log['adds'][htlc_id] = (v.amount_msat, v.payment_hash, v.cltv_abs, v.htlc_id, v.timestamp)
-                assert (v.local_locked_in is not None or v.remote_locked_in is not None), v
-                target_log['locked_in'][htlc_id] = {'1':v.local_locked_in, '-1':v.remote_locked_in}
-                if v.local_settle is not None or v.remote_settle is not None:
-                    target_log['settles'][htlc_id] = {'1':v.local_settle, '-1':v.remote_settle}
-                if v.local_fail is not None or v.remote_fail is not None:
-                    target_log['fails'][htlc_id] = {'1':v.local_fail, '-1':v.remote_fail}
+                assert (v.local_ctn_in is not None or v.remote_ctn_in is not None), v
+                target_log['locked_in'][htlc_id] = {'1':v.local_ctn_in, '-1':v.remote_ctn_in}
+                if v.local_ctn_out is not None or v.remote_ctn_out is not None:
+                    target_log['settles' if v.is_success else 'fails'][htlc_id] = {'1':v.local_ctn_out, '-1':v.remote_ctn_out}
+
             for fee_update_id, v in fee_updates_log[proposer].items():
                 target_log['fee_updates'][fee_update_id] = {'rate':v.rate, 'ctn_local':v.ctn_local, 'ctn_remote':v.ctn_remote}
 

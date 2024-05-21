@@ -1764,12 +1764,6 @@ class Channel(AbstractChannel):
         key = 'their_signed_remote_peerbackup' if owner == REMOTE else 'their_signed_local_peerbackup'
         self.storage[key] = ctn, peerbackup_bytes.hex(), signature.hex()
 
-    def get_ctn_below_latest(self, proposer, name, htlc_id, owner):
-        ctn = self.hm.log[proposer][name].get(htlc_id, {}).get(owner)
-        if ctn is not None and ctn > self.hm.ctn_latest(owner):
-            ctn = None
-        return ctn
-
     def get_our_peerbackup(self) -> dict:
         return PeerBackup.from_channel(self)
 

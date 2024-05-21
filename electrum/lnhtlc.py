@@ -86,6 +86,13 @@ class HTLCManager:
     def _set_revack_pending(self, sub: HTLCOwner, pending: bool) -> None:
         self.log[sub]['revack_pending'] = pending
 
+    def get_ctn_if_lower_than_latest(self, proposer, name, htlc_id, owner):
+        ctn = self.log[proposer][name].get(htlc_id, {}).get(owner)
+        if ctn is not None and ctn <= self.ctn_latest(owner):
+            return ctn
+        else:
+            return None
+
     def get_next_htlc_id(self, sub: HTLCOwner) -> int:
         return self.log[sub]['next_htlc_id']
 
