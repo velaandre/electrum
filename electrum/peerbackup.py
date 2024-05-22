@@ -50,6 +50,18 @@ from .crypto import sha256
 
 PEERBACKUP_VERSION = 0
 
+def ctn_to_bytes(x):
+    if x is None:
+        x = -1
+    return int.to_bytes(x, length=8, byteorder="big", signed=True)
+
+def bytes_to_ctn(x):
+    ctn = int.from_bytes(x, byteorder="big", signed=True)
+    if ctn == -1:
+        ctn = None
+    return ctn
+
+
 @attr.s
 class HtlcUpdate:
     htlc_id = attr.ib(type=int)
@@ -70,18 +82,6 @@ class HtlcUpdate:
         self.local_ctn_out = self.remote_ctn_out
         self.remote_ctn_in = a
         self.remote_ctn_out = b
-
-    def blank_local(self):
-        self.local_ctn_in = None
-        self.local_ctn_out = None
-        if self.remote_ctn_out is None:
-            self.is_success = False
-
-    def blank_remote(self):
-        self.remote_ctn_in = None
-        self.remote_tn_out = None
-        if self.local_ctn_out is None:
-            self.is_success = False
 
     def update_local(self, v):
         self.local_ctn_in = v.local_ctn_in
@@ -105,11 +105,18 @@ class HtlcUpdate:
             self.remote_ctn_out,
         )
 
-    def to_bytes(self, proposer, blank_timestamps=False):
-        def ctn_to_bytes(x):
-            if x is None:
-                x = -1
-            return int.to_bytes(x, length=8, byteorder="big", signed=True)
+    def to_bytes(self, proposer, owner=None, blank_timestamps=False):
+        local_ctn_in = None if owner == REMOTE else self.local_ctn_in
+        local_ctn_out = None if owner == REMOTE else self.local_ctn_out
+        remote_ctn_in = None if owner == LOCAL else self.remote_ctn_in
+        remote_ctn_out = None if owner == LOCAL else self.remote_ctn_out
+        is_success = self.is_success
+        if owner == LOCAL and self.local_ctn_out is None:
+            is_success = False
+        if owner == REMOTE and self.remote_ctn_out is None:
+            is_success = False
+        if local_ctn_in is None and remote_ctn_in is None:
+            return
         r = b'\x00' if proposer==LOCAL else b'\x01'
         r += int.to_bytes(self.htlc_id, length=8, byteorder="big", signed=False)
         r += int.to_bytes(self.amount_msat, length=8, byteorder="big", signed=False)
@@ -117,21 +124,16 @@ class HtlcUpdate:
         r += int.to_bytes(self.cltv_abs, length=8, byteorder="big", signed=False)
         r += int.to_bytes(0 if blank_timestamps else self.timestamp, length=8, byteorder="big", signed=False)
         r += b'\x01' if self.is_success else b'\x00'
-        r += ctn_to_bytes(self.local_ctn_in)
-        r += ctn_to_bytes(self.local_ctn_out)
-        r += ctn_to_bytes(self.remote_ctn_in)
-        r += ctn_to_bytes(self.remote_ctn_out)
+        r += ctn_to_bytes(local_ctn_in)
+        r += ctn_to_bytes(local_ctn_out)
+        r += ctn_to_bytes(remote_ctn_in)
+        r += ctn_to_bytes(remote_ctn_out)
         assert len(r) == 98, len(r)
         return r
 
     @classmethod
     def from_bytes(cls, chunk:bytes):
         assert len(chunk) == 98, len(chunk)
-        def bytes_to_ctn(x):
-            ctn = int.from_bytes(x, byteorder="big", signed=True)
-            if ctn == -1:
-                ctn = None
-            return ctn
         with io.BytesIO(bytes(chunk)) as s:
             proposer = LOCAL if s.read(1) == b'\x00' else REMOTE
             htlc_update = HtlcUpdate(
@@ -162,27 +164,22 @@ class FeeUpdateNotStored:
     def to_json(self):
         return (self.rate, self.ctn_local, self.ctn_remote)
 
-    def to_bytes(self, proposer, fee_update_id):
-        def ctn_to_bytes(x):
-            if x is None:
-                x = -1
-            return int.to_bytes(x, length=8, byteorder="big", signed=True)
+    def to_bytes(self, proposer, fee_update_id, owner):
+        ctn_local = None if owner == REMOTE else self.ctn_local
+        ctn_remote = None if owner == LOCAL else self.ctn_remote
+        if ctn_remote is None and ctn_local is None:
+            return
         r = b'\x00' if proposer==LOCAL else b'\x01'
         r += int.to_bytes(fee_update_id, length=8, byteorder="big", signed=False)
         r += int.to_bytes(self.rate, length=8, byteorder="big", signed=False)
-        r += ctn_to_bytes(self.ctn_local)
-        r += ctn_to_bytes(self.ctn_remote)
+        r += ctn_to_bytes(ctn_local)
+        r += ctn_to_bytes(ctn_remote)
         assert len(r) == 33, len(r)
         return r
 
     @classmethod
     def from_bytes(cls, chunk:bytes):
         assert len(chunk) == 33
-        def bytes_to_ctn(x):
-            ctn = int.from_bytes(x, byteorder="big", signed=True)
-            if ctn == -1:
-                ctn = None
-            return ctn
         with io.BytesIO(bytes(chunk)) as s:
             proposer = LOCAL if s.read(1) == b'\x00' else REMOTE
             fee_update_id = int.from_bytes(s.read(8), byteorder="big")
@@ -425,18 +422,23 @@ class PeerBackup:
 
         return PeerBackup(**state)
 
-    def to_bytes(self, blank_timestamps=False) -> bytes:
+    def to_bytes(self, owner=None, blank_timestamps=False) -> bytes:
         htlc_log_bytes = b''
         htlc_history_hash = sha256(b'htlc_history')
         for proposer in [LOCAL, REMOTE]:
             for htlc_id, htlc_update in list(self.htlc_log[proposer].items()):
-                _bytes = htlc_update.to_bytes(proposer, blank_timestamps)
+                _bytes = htlc_update.to_bytes(proposer, owner, blank_timestamps)
+                if _bytes is None:
+                    continue
                 htlc_log_bytes += _bytes
 
         fee_updates_log_bytes = b''
         for proposer in [LOCAL, REMOTE]:
             for fee_update_id, fee_update in list(self.fee_updates_log[proposer].items()):
-                fee_updates_log_bytes += fee_update.to_bytes(proposer, fee_update_id)
+                _bytes = fee_update.to_bytes(proposer, fee_update_id, owner)
+                if _bytes is None:
+                    continue
+                fee_updates_log_bytes += _bytes
 
         payload = {
             'version': {'version': PEERBACKUP_VERSION},
@@ -456,8 +458,7 @@ class PeerBackup:
                 'output_index': self.funding_outpoint['output_index'],
             },
         }
-
-        if self.revocation_store:
+        if owner != LOCAL:
             buckets_bytes = b''
             buckets = self.revocation_store['buckets']
             for k, v in sorted(buckets.items()):
@@ -466,17 +467,14 @@ class PeerBackup:
                 r += bytes.fromhex(_hash)
                 r += int.to_bytes(_index, length=8, byteorder="big", signed=False)
                 buckets_bytes += r
-
             payload['revocation_store'] = {
                 'index': self.revocation_store['index'],
                 'buckets': buckets_bytes,
             }
-        if self.remote_config:
             a, b = self.convert_config_to_payload(self.remote_config, self.remote_ctn)
             payload['remote_config'] = a
             payload['remote_ctx'] = b
-
-        if self.local_config:
+        if owner != REMOTE:
             a, b = self.convert_config_to_payload(self.local_config, self.local_ctn)
             payload['local_config'] = a
             payload['local_ctx'] = b
@@ -580,44 +578,6 @@ class PeerBackup:
                 v.flip()
 
         self.constraints['is_initiator'] = not self.constraints['is_initiator']
-
-    def _filter_peerbackup(self, owner) -> dict:
-        """ filter out what should not be signed """
-
-        if owner == REMOTE:
-            self.local_config = None
-            self.local_ctn = None
-        else:
-            self.remote_config = None
-            self.remote_ctn = None
-
-        # blank fields
-        htlc_log = self.htlc_log
-        for proposer in [LOCAL, REMOTE]:
-            for htlc_id, v in list(htlc_log[proposer].items()):
-                if owner == REMOTE:
-                    v.blank_local()
-                else:
-                    v.blank_remote()
-                if v.local_ctn_in is None and v.remote_ctn_in is None:
-                    htlc_log[proposer].pop(htlc_id)
-        # blank fields
-        fee_updates_log = self.fee_updates_log
-        for proposer in [LOCAL, REMOTE]:
-            for fee_update_id, v in list(fee_updates_log[proposer].items()):
-                #fee_update, local_ctn, remote_ctn = v
-                if owner == REMOTE:
-                    v.ctn_local = None
-                else:
-                    v.ctn_remote = None
-                if v.ctn_local is None and v.ctn_remote is None:
-                    fee_updates_log[proposer].pop(fee_update_id)
-
-        # revocation store is not part of local
-        if owner == LOCAL:
-            self.revocation_store = None
-        if owner == REMOTE:
-            self.remote_config['encrypted_seed'] = None
 
     def recreate_channel_state(self, lnworker) -> dict:
         """ returns a json compatible with channel storage """

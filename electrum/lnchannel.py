@@ -1743,8 +1743,7 @@ class Channel(AbstractChannel):
 
     def receive_new_peerbackup(self, signature:bytes, owner: HTLCOwner):
         peerbackup = self.get_their_peerbackup()
-        peerbackup._filter_peerbackup(owner)
-        peerbackup_bytes = peerbackup.to_bytes(blank_timestamps=True)
+        peerbackup_bytes = peerbackup.to_bytes(owner=owner, blank_timestamps=True)
         sighash = sha256d(peerbackup_bytes)
         pubkey = self.config[REMOTE].multisig_key.pubkey
         if not ECPubkey(pubkey).ecdsa_verify(signature, sighash):
@@ -1760,7 +1759,7 @@ class Channel(AbstractChannel):
         else:
             self.logger.info(f'receive_new_peerbackup {owner}: good signature')
 
-        peerbackup_bytes = peerbackup.to_bytes()
+        peerbackup_bytes = peerbackup.to_bytes(owner=owner)
         ctn = peerbackup.local_ctn if owner == LOCAL else peerbackup.remote_ctn
         key = 'their_signed_remote_peerbackup' if owner == REMOTE else 'their_signed_local_peerbackup'
         self.storage[key] = ctn, peerbackup_bytes.hex(), signature.hex()
@@ -1777,8 +1776,7 @@ class Channel(AbstractChannel):
 
     def get_our_peerbackup_signature(self, owner):
         peerbackup = self.get_our_peerbackup()
-        peerbackup._filter_peerbackup(owner)
-        peerbackup_bytes = peerbackup.to_bytes(blank_timestamps=True)
+        peerbackup_bytes = peerbackup.to_bytes(owner=owner, blank_timestamps=True)
         sighash = sha256d(peerbackup_bytes)
         privkey = self.config[LOCAL].multisig_key.privkey
         signature = ecc.ECPrivkey(privkey).ecdsa_sign(sighash, sigencode=ecc.ecdsa_sig64_from_r_and_s)
@@ -1874,8 +1872,7 @@ class Channel(AbstractChannel):
 
     def verify_peerbackup(self, owner, peerbackup_bytes, signature):
         peerbackup = PeerBackup.from_bytes(peerbackup_bytes)
-        peerbackup._filter_peerbackup(owner)
-        peerbackup_bytes = peerbackup.to_bytes(blank_timestamps=True)
+        peerbackup_bytes = peerbackup.to_bytes(owner=owner, blank_timestamps=True)
         sighash = sha256d(peerbackup_bytes)
         key = 'our_local_state_hash' if owner == LOCAL else 'our_remote_state_hash'
         our_sighash = bytes.fromhex(self.storage.get(key, ''))
