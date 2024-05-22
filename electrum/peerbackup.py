@@ -506,6 +506,9 @@ class PeerBackup:
         # merge htlc logs
         local_htlc_log = local_peerbackup.htlc_log
         remote_htlc_log = remote_peerbackup.htlc_log
+        print(local_htlc_log)
+        print(remote_htlc_log)
+        print('------------')
         for proposer in [LOCAL, REMOTE]:
             for htlc_id, local_v in list(local_htlc_log[proposer].items()):
                 remote_v = remote_htlc_log[proposer].get(htlc_id)
@@ -578,7 +581,7 @@ class PeerBackup:
 
         self.constraints['is_initiator'] = not self.constraints['is_initiator']
 
-    def _filter_peerbackup(self, owner, is_client: bool) -> dict:
+    def _filter_peerbackup(self, owner) -> dict:
         """ filter out what should not be signed """
 
         if owner == REMOTE:
@@ -613,6 +616,8 @@ class PeerBackup:
         # revocation store is not part of local
         if owner == LOCAL:
             self.revocation_store = None
+        if owner == REMOTE:
+            self.remote_config['encrypted_seed'] = None
 
     def recreate_channel_state(self, lnworker) -> dict:
         """ returns a json compatible with channel storage """

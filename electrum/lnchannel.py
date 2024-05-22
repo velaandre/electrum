@@ -1742,7 +1742,8 @@ class Channel(AbstractChannel):
         return s
 
     def receive_new_peerbackup(self, signature:bytes, owner: HTLCOwner):
-        peerbackup = self.get_their_signed_peerbackup(owner)
+        peerbackup = self.get_their_peerbackup()
+        peerbackup._filter_peerbackup(owner)
         peerbackup_bytes = peerbackup.to_bytes(blank_timestamps=True)
         sighash = sha256d(peerbackup_bytes)
         pubkey = self.config[REMOTE].multisig_key.pubkey
@@ -1771,27 +1772,12 @@ class Channel(AbstractChannel):
         p = self.get_our_peerbackup()
         p.flip_values()
         p.node_id = self.lnworker.node_keypair.pubkey.hex()
-        return p
-
-    def get_our_signed_peerbackup(self, owner) -> dict:
-        """client method"""
-        p = self.get_our_peerbackup()
-        p._filter_peerbackup(owner, True)
-        if owner == REMOTE:
-            p.remote_config['encrypted_seed'] = None
-        return p
-
-    def get_their_signed_peerbackup(self, owner) -> dict:
-        """server method"""
-        p = self.get_their_peerbackup()
-        p._filter_peerbackup(owner, False)
-        if owner == REMOTE:
-            p.remote_config['encrypted_seed'] = None
-            p.revocation_store = self.get_their_revocation_store()
+        p.revocation_store = self.get_their_revocation_store()
         return p
 
     def get_our_peerbackup_signature(self, owner):
-        peerbackup = self.get_our_signed_peerbackup(owner)
+        peerbackup = self.get_our_peerbackup()
+        peerbackup._filter_peerbackup(owner)
         peerbackup_bytes = peerbackup.to_bytes(blank_timestamps=True)
         sighash = sha256d(peerbackup_bytes)
         privkey = self.config[LOCAL].multisig_key.privkey
@@ -1888,7 +1874,7 @@ class Channel(AbstractChannel):
 
     def verify_peerbackup(self, owner, peerbackup_bytes, signature):
         peerbackup = PeerBackup.from_bytes(peerbackup_bytes)
-        peerbackup._filter_peerbackup(owner, True)
+        peerbackup._filter_peerbackup(owner)
         peerbackup_bytes = peerbackup.to_bytes(blank_timestamps=True)
         sighash = sha256d(peerbackup_bytes)
         key = 'our_local_state_hash' if owner == LOCAL else 'our_remote_state_hash'
