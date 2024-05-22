@@ -65,7 +65,8 @@ class HTLCManager:
         if max_local_ctn == local_ctn:
             return True
         else:
-            assert max_local_ctn + 1 == local_ctn, f'max_local_ctn={max_local_ctn}, local_ctn={local_ctn}'
+            # this assert does not work anymore when htlc history is not available
+            #assert max_local_ctn + 1 == local_ctn, f'max_local_ctn={max_local_ctn}, local_ctn={local_ctn}'
             return False
 
     @with_lock

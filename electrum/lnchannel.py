@@ -1752,8 +1752,9 @@ class Channel(AbstractChannel):
             if self.DEBUG_PEERBACKUP:
                 filename = "their_local_state" if owner == LOCAL else "their_remote_state"
                 path = self.diagnostic_name() + '_' + filename + '_%d'%ctn
-                with open(path, "w") as f:
-                    f.write(json.dumps(peerbackup, cls=util.MyEncoder, sort_keys=True, indent=2))
+                with open(path, "wb") as f:
+                    f.write(peerbackup_bytes)
+                    #f.write(json.dumps(peerbackup, cls=util.MyEncoder, sort_keys=True, indent=2))
                 self.logger.info(f'state saved in {path}')
             raise Exception(f'incorrect signature')
         else:
@@ -1786,8 +1787,9 @@ class Channel(AbstractChannel):
         if self.DEBUG_PEERBACKUP:
             filename = "our_local_state" if owner == LOCAL else "our_remote_state"
             path = self.diagnostic_name() + '_' + filename + '_%d'%ctn
-            with open(path, "w") as f:
-                f.write(json.dumps(peerbackup.to_json(), cls=util.MyEncoder, sort_keys=True, indent=2))
+            with open(path, "wb") as f:
+                f.write(peerbackup_bytes)
+                #f.write(json.dumps(peerbackup, cls=util.MyEncoder, sort_keys=True, indent=2))
                 self.logger.info(f'wrote {path}')
         s = 'our_local_state_hash' if owner == LOCAL else 'our_remote_state_hash'
         self.storage[s] = sighash.hex()
@@ -1880,8 +1882,9 @@ class Channel(AbstractChannel):
             self.logger.info('cannot compare sighashes')
         elif sighash != our_sighash:
             if self.DEBUG_PEERBACKUP:
-                with open('verify_peerbackup', 'w+', encoding='utf-8') as f:
-                    json.dump(peerbackup.to_json(), f, indent=2, sort_keys=True)
+                with open('verify_peerbackup', 'wb') as f: #, encoding='utf-8') as f:
+                    f.write(peerbackup_bytes)
+                    #f.write(json.dumps(peerbackup, cls=util.MyEncoder, sort_keys=True, indent=2))
             raise Exception(f'received peerbackup does not match our last sent {owner.name}')
         pubkey = self.config[LOCAL].multisig_key.pubkey
         if not ECPubkey(pubkey).ecdsa_verify(signature, sighash):
