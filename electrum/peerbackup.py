@@ -48,6 +48,34 @@ from .crypto import sha256
 #    ---Rev->         bob: receive_new_peerbackup(their_local)  alice: get_our_signed_peerbackup(local)
 
 
+
+# update_fee:
+#
+#    Alice does not need to remember the feerate that applies to Bob's ctx
+#    she needs to remember for her local ctx
+#
+# Bolt2: An update_fee message is sent by the node which is paying the
+# Bitcoin fee. Like any update, it's first committed to the receiver's
+# commitment transaction and then (once acknowledged) committed to the
+# sender's. Unlike an HTLC, update_fee is never closed but simply
+# replaced.
+#
+#  A                    B
+#    ---update_fee--->
+#    ---CS----------->     # remote (remote: new, local:old) -> (current_feerate, remote_ctn-1, local_ctn) (pending_feerate, remote_ctn, None)
+#    <--rev_ack-------     # local
+#
+# pending_feerate will apply to next ctx: current_feerate := pending_feerate. (ctn_local is increased)
+#
+#    <--update_fee----
+#    <--CS------------      # in local
+#    ---rev_ack------>      # in remote (remote:new, local:new)
+#
+#    current_feerate, pending_feerate
+
+
+
+
 PEERBACKUP_VERSION = 0
 
 def ctn_to_bytes(x):
@@ -150,45 +178,6 @@ class HtlcUpdate:
             )
         return proposer, htlc_update
 
-@attr.s
-class FeeUpdateNotStored:
-    rate = attr.ib(type=int)  # in sat/kw
-    ctn_local = attr.ib(default=None, type=int)
-    ctn_remote = attr.ib(default=None, type=int)
-
-    def flip(self):
-        a = self.ctn_local
-        self.ctn_local = self.ctn_remote
-        self.ctn_remote = a
-
-    def to_json(self):
-        return (self.rate, self.ctn_local, self.ctn_remote)
-
-    def to_bytes(self, proposer, fee_update_id, owner):
-        ctn_local = None if owner == REMOTE else self.ctn_local
-        ctn_remote = None if owner == LOCAL else self.ctn_remote
-        if ctn_remote is None and ctn_local is None:
-            return
-        r = b'\x00' if proposer==LOCAL else b'\x01'
-        r += int.to_bytes(fee_update_id, length=8, byteorder="big", signed=False)
-        r += int.to_bytes(self.rate, length=8, byteorder="big", signed=False)
-        r += ctn_to_bytes(ctn_local)
-        r += ctn_to_bytes(ctn_remote)
-        assert len(r) == 33, len(r)
-        return r
-
-    @classmethod
-    def from_bytes(cls, chunk:bytes):
-        assert len(chunk) == 33
-        with io.BytesIO(bytes(chunk)) as s:
-            proposer = LOCAL if s.read(1) == b'\x00' else REMOTE
-            fee_update_id = int.from_bytes(s.read(8), byteorder="big")
-            fee_update = FeeUpdateNotStored(
-                rate = int.from_bytes(s.read(8), byteorder="big"),
-                ctn_local = bytes_to_ctn(s.read(8)),
-                ctn_remote = bytes_to_ctn(s.read(8)),
-            )
-        return proposer, fee_update_id, fee_update
 
 @attr.s
 class PeerBackup:
@@ -207,6 +196,8 @@ class PeerBackup:
     revocation_store = attr.ib(default=None, type=str)
     local_history_hash = attr.ib(default=b'htlc_history'+bytes(20), type=bytes)
     remote_history_hash = attr.ib(default=b'htlc_history'+bytes(20), type=bytes)
+    current_feerate = attr.ib(type=int, default=None)
+    pending_feerate = attr.ib(type=int, default=None)
 
     @classmethod
     def from_channel(cls, chan):
@@ -228,7 +219,6 @@ class PeerBackup:
         # convert log to a list of HtlcUpdate
         log = chan.hm.log
         htlc_log = {LOCAL:{}, REMOTE:{}}
-        fee_updates_log = {LOCAL:{}, REMOTE:{}}
         for proposer in [LOCAL, REMOTE]:
             for htlc_id, add in log[proposer]['adds'].items():
                 local_ctn_in = chan.hm.get_ctn_if_lower_than_latest(proposer, 'locked_in', htlc_id, LOCAL)
@@ -259,14 +249,23 @@ class PeerBackup:
                     remote_ctn_out = remote_ctn_out,
                 )
                 htlc_log[proposer][htlc_id] = htlc_update
-            for update_id, f in log[proposer]['fee_updates'].items():
-                fee_update = FeeUpdateNotStored(
-                    rate=f.rate,
-                    ctn_local=f.ctn_local,
-                    ctn_remote=f.ctn_remote,
-                )
-                assert (fee_update.ctn_local is not None or fee_update.ctn_remote is not None), fee_update
-                fee_updates_log[proposer][update_id] = fee_update
+
+        fee_updater = LOCAL if state['constraints']['is_initiator'] else REMOTE
+        fee_updates_log = log[fee_updater]['fee_updates']
+        last_fee_update_id = max(fee_updates_log.keys())
+        last_fee_update = fee_updates_log[last_fee_update_id]
+        last_feerate = last_fee_update.rate
+        if last_fee_update_id > 0:
+            previous_fee_update = fee_updates_log[last_fee_update_id - 1]
+            previous_feerate = previous_fee_update.rate
+        else:
+            previous_feerate = None
+        if last_fee_update.ctn_local is None:
+            current_feerate = previous_feerate
+            pending_feerate = last_feerate
+        else:
+            current_feerate = last_feerate
+            pending_feerate = None
 
         return PeerBackup(
             channel_id = state['channel_id'],
@@ -279,8 +278,9 @@ class PeerBackup:
             local_ctn = state['log']['1']['ctn'],
             remote_ctn = state['log']['-1']['ctn'],
             htlc_log = htlc_log,
-            fee_updates_log = fee_updates_log,
             revocation_store = state['revocation_store'],
+            current_feerate = current_feerate,
+            pending_feerate = pending_feerate,
         )
 
     def to_json(self):
@@ -302,6 +302,8 @@ class PeerBackup:
             'revocation_store': p.revocation_store,
             'local_history_hash': p.local_history_hash,
             'remote_history_hash': p.remote_history_hash,
+            'current_feerate': p.current_feerate,
+            'pending_feerate': p.pending_feerate,
         }
 
     @classmethod
@@ -379,7 +381,9 @@ class PeerBackup:
             'funding_outpoint': {
                 'txid': payload['funding_outpoint']['txid'].hex(),
                 'output_index': payload['funding_outpoint']['output_index'],
-            }
+            },
+            'current_feerate': payload['feerate']['current'],
+            'pending_feerate': payload['feerate']['pending'],
         }
         if 'revocation_store' in payload:
             buckets = {}
@@ -409,15 +413,6 @@ class PeerBackup:
             state['local_ctn'] = b
             if 'encrypted_seed' in payload:
                 state['local_config']['encrypted_seed'] = payload['encrypted_seed']['seed'].hex()
-
-        fee_updates_log_bytes = payload['fee_updates_log']['fee_updates_log']
-        fee_updates_log = {LOCAL:{}, REMOTE:{}}
-        while fee_updates_log_bytes:
-            chunk = fee_updates_log_bytes[0:33]
-            fee_updates_log_bytes = fee_updates_log_bytes[33:]
-            proposer, fee_update_id, fee_update = FeeUpdateNotStored.from_bytes(chunk)
-            fee_updates_log[proposer][fee_update_id] = fee_update
-        state['fee_updates_log'] = fee_updates_log
 
         htlc_log_bytes = payload['htlc_log']['active_htlcs']
         htlc_log = {LOCAL:{}, REMOTE:{}}
@@ -459,14 +454,6 @@ class PeerBackup:
                    or (local_ctn_in is not None and local_ctn_out is None):
                     htlc_log_bytes += _bytes
 
-        fee_updates_log_bytes = b''
-        for proposer in [LOCAL, REMOTE]:
-            for fee_update_id, fee_update in list(self.fee_updates_log[proposer].items()):
-                _bytes = fee_update.to_bytes(proposer, fee_update_id, owner)
-                if _bytes is None:
-                    continue
-                fee_updates_log_bytes += _bytes
-
         if owner == LOCAL:
             remote_history_hash = bytes(32)
         if owner == REMOTE:
@@ -482,10 +469,8 @@ class PeerBackup:
                 'remote_history_hash': remote_history_hash,
                 'active_htlcs': htlc_log_bytes,
             },
-            'fee_updates_log': {
-                'fee_updates_log': fee_updates_log_bytes,
-            },
             'constraints': self.constraints,
+            'feerate': {'current': self.current_feerate, 'pending': self.pending_feerate or 0},
             'funding_outpoint': {
                 'txid': bytes.fromhex(self.funding_outpoint['txid']),
                 'output_index': self.funding_outpoint['output_index'],
@@ -527,6 +512,7 @@ class PeerBackup:
     def merge_peerbackup_bytes(cls, local_peerbackup_bytes, remote_peerbackup_bytes):
         local_peerbackup = PeerBackup.from_bytes(local_peerbackup_bytes)
         remote_peerbackup = PeerBackup.from_bytes(remote_peerbackup_bytes)
+        print('current_feerate', local_peerbackup.current_feerate, remote_peerbackup.current_feerate)
         #
         local_peerbackup.revocation_store = remote_peerbackup.revocation_store
         #
@@ -559,23 +545,6 @@ class PeerBackup:
                     local_htlc_log[proposer][htlc_id] = remote_v
         assert local_htlc_log == remote_htlc_log
 
-        # merge fee_update logs
-        local_fee_updates_log = local_peerbackup.fee_updates_log
-        remote_fee_updates_log = remote_peerbackup.fee_updates_log
-        for proposer in [LOCAL, REMOTE]:
-            for fee_update_id, local_v in list(local_fee_updates_log[proposer].items()):
-                remote_v = remote_fee_updates_log[proposer].get(fee_update_id)
-                if remote_v:
-                    local_v.ctn_remote = remote_v.ctn_remote
-                    local_fee_updates_log[proposer][fee_update_id] = local_v
-        for proposer in [LOCAL, REMOTE]:
-            for fee_update_id, remote_v in list(remote_fee_updates_log[proposer].items()):
-                local_v = local_fee_updates_log[proposer].get(fee_update_id)
-                if local_v:
-                    remote_v.ctn_local = local_v.ctn_local
-                    remote_fee_updates_log[proposer][fee_update_id] = remote_v
-        assert local_fee_updates_log == remote_fee_updates_log
-
         assert local_peerbackup == remote_peerbackup
         return local_peerbackup.to_bytes()
 
@@ -590,6 +559,10 @@ class PeerBackup:
         self.remote_ctn = self.local_ctn
         self.local_ctn = x
 
+        #x = self.remote_feerate
+        #self.remote_feerate = self.local_feerate
+        #self.local_feerate = x
+
         x = self.remote_config
         self.remote_config = self.local_config
         self.local_config = x
@@ -597,11 +570,6 @@ class PeerBackup:
         flip_values(self.htlc_log, LOCAL, REMOTE)
         for proposer in [LOCAL, REMOTE]:
             for htlc_id, v in self.htlc_log[proposer].items():
-                v.flip()
-
-        flip_values(self.fee_updates_log, LOCAL, REMOTE)
-        for proposer in [LOCAL, REMOTE]:
-            for fee_update_id, v in self.fee_updates_log[proposer].items():
                 v.flip()
 
         self.constraints['is_initiator'] = not self.constraints['is_initiator']
@@ -627,10 +595,9 @@ class PeerBackup:
         # rebuild the log from local and remote
         log = {
             '1': deepcopy(LOG_TEMPLATE),
-            '-1': deepcopy(LOG_TEMPLATE)
+            '-1': deepcopy(LOG_TEMPLATE),
         }
         htlc_log = state.pop('htlc_log')
-        fee_updates_log = state.pop('fee_updates_log')
         for proposer in [LOCAL, REMOTE]:
             target_log = log[str(int(proposer))]
             for htlc_id, v in htlc_log[proposer].items():
@@ -640,11 +607,22 @@ class PeerBackup:
                 if v.local_ctn_out is not None or v.remote_ctn_out is not None:
                     target_log['settles' if v.is_success else 'fails'][htlc_id] = {'1':v.local_ctn_out, '-1':v.remote_ctn_out}
 
-            for fee_update_id, v in fee_updates_log[proposer].items():
-                target_log['fee_updates'][fee_update_id] = {'rate':v.rate, 'ctn_local':v.ctn_local, 'ctn_remote':v.ctn_remote}
+        local_ctn = state.pop('local_ctn')
+        remote_ctn = state.pop('remote_ctn')
+        log['1']['ctn'] = local_ctn
+        log['-1']['ctn'] = remote_ctn
 
-        log['1']['ctn'] = state.pop('local_ctn')
-        log['-1']['ctn'] = state.pop('remote_ctn')
+        current_feerate = state.pop('current_feerate')
+        pending_feerate = state.pop('pending_feerate')
+        fee_proposer = '1' if state['constraints']['is_initiator'] else '-1'
+        fee_log = log[fee_proposer]['fee_updates']
+        # the following ctns depend on message ordering
+        if pending_feerate:
+            fee_log[0] = {'rate':current_feerate, 'ctn_local':local_ctn, 'ctn_remote':(remote_ctn-1)}
+            fee_log[1] = {'rate':pending_feerate, 'ctn_local':None, 'ctn_remote':remote_ctn}
+        else:
+            fee_log[0] = {'rate':current_feerate, 'ctn_local':local_ctn, 'ctn_remote':remote_ctn}
+
         lnworker.logger.info(f'{log}')
         state['log'] = log
         state['log']['1']['was_revoke_last'] = False

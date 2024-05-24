@@ -48,6 +48,7 @@ class HTLCManager:
     def is_local_ctn_reached(self):
         # detect whether local ctn is reached in log values
         # todo: add test for this. make more efficient
+        # fixme: ctn might be reached fee updates, but we have changed what we send
         def max_over_dict(dd):
             result = max([-1] + [(d.get(LOCAL) if d.get(LOCAL) is not None else -1) for htlc_id, d in dd.items()])
             return result

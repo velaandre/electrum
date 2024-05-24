@@ -13,12 +13,13 @@ tlvtype,payload,channel_type,8
 tlvdata,payload,channel_type,type,byte,...
 tlvtype,payload,encrypted_seed,10
 tlvdata,payload,encrypted_seed,seed,byte,...
+tlvtype,payload,feerate,12
+tlvdata,payload,feerate,current,u64,
+tlvdata,payload,feerate,pending,u64,
 tlvtype,payload,htlc_log,14
 tlvdata,payload,htlc_log,local_history_hash,sha256,
 tlvdata,payload,htlc_log,remote_history_hash,sha256,
 tlvdata,payload,htlc_log,active_htlcs,byte,...
-tlvtype,payload,fee_updates_log,16
-tlvdata,payload,fee_updates_log,fee_updates_log,byte,...
 tlvtype,payload,funding_outpoint,18
 tlvdata,payload,funding_outpoint,txid,sha256,
 tlvdata,payload,funding_outpoint,output_index,u16,
