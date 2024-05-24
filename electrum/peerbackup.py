@@ -78,14 +78,17 @@ from .crypto import sha256
 
 PEERBACKUP_VERSION = 0
 
+MAX_CTN = pow(2,8*6) - 1
+
 def ctn_to_bytes(x):
     if x is None:
-        x = -1
-    return int.to_bytes(x, length=8, byteorder="big", signed=True)
+        x = MAX_CTN
+    return int.to_bytes(x, length=6, byteorder="big", signed=False)
 
 def bytes_to_ctn(x):
-    ctn = int.from_bytes(x, byteorder="big", signed=True)
-    if ctn == -1:
+    assert len(x) == 6
+    ctn = int.from_bytes(x, byteorder="big", signed=False)
+    if ctn == MAX_CTN:
         ctn = None
     return ctn
 
@@ -156,12 +159,12 @@ class HtlcUpdate:
         r += ctn_to_bytes(local_ctn_out)
         r += ctn_to_bytes(remote_ctn_in)
         r += ctn_to_bytes(remote_ctn_out)
-        assert len(r) == 98, len(r)
+        assert len(r) == 90, len(r)
         return r
 
     @classmethod
     def from_bytes(cls, chunk:bytes):
-        assert len(chunk) == 98, len(chunk)
+        assert len(chunk) == 90, len(chunk)
         with io.BytesIO(bytes(chunk)) as s:
             proposer = LOCAL if s.read(1) == b'\x00' else REMOTE
             htlc_update = HtlcUpdate(
@@ -171,10 +174,10 @@ class HtlcUpdate:
                 cltv_abs = int.from_bytes(s.read(8), byteorder="big"),
                 timestamp = int.from_bytes(s.read(8), byteorder="big"),
                 is_success = bool(s.read(1) == b'\x01'),
-                local_ctn_in = bytes_to_ctn(s.read(8)),
-                local_ctn_out = bytes_to_ctn(s.read(8)),
-                remote_ctn_in = bytes_to_ctn(s.read(8)),
-                remote_ctn_out = bytes_to_ctn(s.read(8)),
+                local_ctn_in = bytes_to_ctn(s.read(6)),
+                local_ctn_out = bytes_to_ctn(s.read(6)),
+                remote_ctn_in = bytes_to_ctn(s.read(6)),
+                remote_ctn_out = bytes_to_ctn(s.read(6)),
             )
         return proposer, htlc_update
 
@@ -417,8 +420,8 @@ class PeerBackup:
         htlc_log_bytes = payload['htlc_log']['active_htlcs']
         htlc_log = {LOCAL:{}, REMOTE:{}}
         while htlc_log_bytes:
-            chunk = htlc_log_bytes[0:98]
-            htlc_log_bytes = htlc_log_bytes[98:]
+            chunk = htlc_log_bytes[0:90]
+            htlc_log_bytes = htlc_log_bytes[90:]
             proposer, htlc_update = HtlcUpdate.from_bytes(chunk)
             htlc_log[proposer][htlc_update.htlc_id] = htlc_update
         state['htlc_log'] = htlc_log
