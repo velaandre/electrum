@@ -1641,6 +1641,9 @@ class Peer(Logger):
                 'timestamp': timestamp,
                 'signature': signature
             }
+            # fixme: if our clock has been set back, we need to wait
+            assert timestamp > chan.storage.get('latest_timestamp', 0)
+            chan.storage['latest_timestamp'] = timestamp
 
     def maybe_send_commitment(self, chan: Channel) -> bool:
         assert util.get_running_loop() == util.get_asyncio_loop(), f"this must be run on the asyncio thread!"
