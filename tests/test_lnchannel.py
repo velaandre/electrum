@@ -116,6 +116,7 @@ def create_channel_state(our_channel_seed, their_encrypted_seed,
             'log': {},
             'unfulfilled_htlcs': {},
             'revocation_store': {},
+            'remote_revocation_store': {},
             'channel_type': lnutil.ChannelType.OPTION_STATIC_REMOTEKEY
     }
     return StoredDict(state, None, [])

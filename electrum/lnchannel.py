@@ -679,6 +679,7 @@ class Channel(AbstractChannel):
         self._sweep_info = {}
         self._outgoing_channel_update = None  # type: Optional[bytes]
         self.revocation_store = RevocationStore(state["revocation_store"])
+        self.remote_revocation_store = RevocationStore(state["remote_revocation_store"]) if 'remote_revocation_store' in state else None
         self._can_send_ctx_updates = True  # type: bool
         self._receive_fail_reasons = {}  # type: Dict[int, (bytes, OnionRoutingFailure)]
         self.should_request_force_close = False
@@ -1222,6 +1223,8 @@ class Channel(AbstractChannel):
             self.config[LOCAL].current_per_commitment_point=self.config[LOCAL].next_per_commitment_point
             self.config[LOCAL].next_per_commitment_point=next_point
             self.hm.send_rev()
+            # fixme: we might send revack multiple times
+            self.remote_revocation_store.add_next_entry(last_secret)
 
         return RevokeAndAck(last_secret, next_point)
 
@@ -1731,16 +1734,6 @@ class Channel(AbstractChannel):
             return False
         return True
 
-    def get_their_revocation_store(self):
-        seed = self.config[LOCAL].per_commitment_secret_seed
-        ctn = self.get_oldest_unrevoked_ctn(LOCAL)
-        store = RevocationStore.from_seed_and_index(seed, ctn)
-        s = store.storage
-        for k, v in list(s['buckets'].items()):
-            hh, cc = v
-            s['buckets'][k] = hh.hex(), cc
-        return s
-
     def receive_new_peerbackup(self, signature:bytes, owner: HTLCOwner):
         peerbackup = self.get_their_peerbackup()
         peerbackup_bytes = peerbackup.to_bytes(owner=owner, blank_timestamps=True)
@@ -1772,7 +1765,7 @@ class Channel(AbstractChannel):
         p = self.get_our_peerbackup()
         p.flip_values()
         p.node_id = self.lnworker.node_keypair.pubkey.hex()
-        p.revocation_store = self.get_their_revocation_store()
+        p.revocation_store = json.loads(json.dumps(self.storage['remote_revocation_store'], cls=util.MyEncoder))
         return p
 
     def get_our_peerbackup_signature(self, owner):

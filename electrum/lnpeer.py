@@ -977,6 +977,7 @@ class Peer(Logger):
             "log": {},
             "unfulfilled_htlcs": {},
             "revocation_store": {},
+            "remote_revocation_store": {},
             "channel_type": channel_type,
         }
         # set db to None, because we do not want to write updates until channel is saved

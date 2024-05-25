@@ -642,4 +642,15 @@ class PeerBackup:
         state['state'] = 'OPEN'
         state['short_channel_id'] = None
         state['data_loss_protect_remote_pcp'] = {}
+        state['revocation_store'] = self.revocation_store
+        state['remote_revocation_store'] = self.get_their_revocation_store(bytes.fromhex(local_config['per_commitment_secret_seed']), local_ctn)
         return state
+
+    def get_their_revocation_store(self, seed, ctn):
+        from .lnutil import RevocationStore
+        store = RevocationStore.from_seed_and_index(seed, ctn)
+        s = store.storage
+        for k, v in list(s['buckets'].items()):
+            hh, cc = v
+            s['buckets'][k] = hh.hex(), cc
+        return s
