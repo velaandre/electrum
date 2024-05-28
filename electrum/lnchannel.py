@@ -662,7 +662,7 @@ class Channel(AbstractChannel):
         self.node_id = bfh(state["node_id"])
         self.onion_keys = state['onion_keys']  # type: Dict[int, bytes]
         self.data_loss_protect_remote_pcp = state['data_loss_protect_remote_pcp']
-        self.hm = HTLCManager(log=state['log'], initial_feerate=initial_feerate)
+        self.hm = HTLCManager(log=state['log'], initiator = LOCAL if self.constraints.is_initiator else REMOTE, initial_feerate=initial_feerate)
         self.unfulfilled_htlcs = state["unfulfilled_htlcs"]  # type: Dict[int, Tuple[str, Optional[str]]]
         # ^ htlc_id -> onion_packet_hex, forwarding_key
         self._state = ChannelState[state['state']]
