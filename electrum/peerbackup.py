@@ -434,6 +434,8 @@ class PeerBackup:
     def to_bytes(self, owner=None, blank_timestamps=False) -> bytes:
         local_history_hash = self.local_history_hash
         remote_history_hash = self.remote_history_hash
+        local_initial_msat = self.local_config['initial_msat']
+        remote_initial_msat = self.remote_config['initial_msat']
         htlc_log_bytes = b''
         for proposer in [LOCAL, REMOTE]:
             for htlc_id, htlc_update in list(self.htlc_log[proposer].items()):
@@ -448,10 +450,12 @@ class PeerBackup:
                 if local_ctn_in is not None and local_ctn_out is not None:
                     _bytes2 = htlc_update.to_bytes(proposer, LOCAL, blank_timestamps=True)
                     local_history_hash = sha256(local_history_hash + _bytes2)
+                    local_initial_msat -= htlc_update.amount_msat * int(proposer)
 
                 if remote_ctn_in is not None and remote_ctn_out is not None:
                     _bytes2 = htlc_update.to_bytes(proposer, REMOTE, blank_timestamps=True)
                     remote_history_hash = sha256(remote_history_hash + _bytes2)
+                    remote_initial_msat += htlc_update.amount_msat * int(proposer)
 
                 if (remote_ctn_in is not None and remote_ctn_out is None)\
                    or (local_ctn_in is not None and local_ctn_out is None):
@@ -494,10 +498,12 @@ class PeerBackup:
             }
             a, b = self.convert_config_to_payload(self.remote_config, self.remote_ctn)
             payload['remote_config'] = a
+            payload['remote_config']['initial_msat'] = remote_initial_msat
             payload['remote_ctx'] = b
         if owner != REMOTE:
             a, b = self.convert_config_to_payload(self.local_config, self.local_ctn)
             payload['local_config'] = a
+            payload['local_config']['initial_msat'] = local_initial_msat
             payload['local_ctx'] = b
             if 'encrypted_seed' in self.local_config:
                 encrypted_seed = self.local_config['encrypted_seed']
