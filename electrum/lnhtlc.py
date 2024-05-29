@@ -44,6 +44,8 @@ class HTLCManager:
         self.lock = log.lock
         self._init_maybe_active_htlc_ids()
         self._is_local_ctn_reached = self.is_local_ctn_reached()
+        self._local_next_htlc_id = self.get_next_htlc_id(LOCAL)
+        self._remote_next_htlc_id = self.get_next_htlc_id(REMOTE)
 
     def is_local_ctn_reached(self):
         # detect whether local ctn is reached in log values
@@ -188,11 +190,13 @@ class HTLCManager:
         assert self.ctn_latest(REMOTE) == self.ctn_oldest_unrevoked(REMOTE), (self.ctn_latest(REMOTE), self.ctn_oldest_unrevoked(REMOTE))
         self._set_revack_pending(REMOTE, True)
         self.log[LOCAL]['was_revoke_last'] = False
+        self._local_next_htlc_id = self.get_next_htlc_id(LOCAL)
 
     @with_lock
     def recv_ctx(self) -> None:
         assert self.ctn_latest(LOCAL) == self.ctn_oldest_unrevoked(LOCAL), (self.ctn_latest(LOCAL), self.ctn_oldest_unrevoked(LOCAL))
         self._set_revack_pending(LOCAL, True)
+        self._remote_next_htlc_id = self.get_next_htlc_id(REMOTE)
 
     @with_lock
     def send_rev(self) -> None:
@@ -295,7 +299,8 @@ class HTLCManager:
         if self.log[REMOTE]['locked_in']:
             self.log[REMOTE]['next_htlc_id'] = max([int(x) for x in self.log[REMOTE]['locked_in'].keys()]) + 1
         else:
-            self.log[REMOTE]['next_htlc_id'] = 0
+            # fixme: test this
+            self.log[REMOTE]['next_htlc_id'] = self._remote_next_htlc_id
         # htlcs removed
         for log_action in ('settles', 'fails'):
             for htlc_id, ctns in list(self.log[LOCAL][log_action].items()):

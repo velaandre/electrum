@@ -44,6 +44,7 @@ tlvdata,payload,remote_config,announcement_bitcoin_sig,signature,
 tlvdata,payload,remote_config,upfront_shutdown_script,byte,...
 tlvtype,payload,remote_ctx,24
 tlvdata,payload,remote_ctx,ctn,u64,
+tlvdata,payload,remote_ctx,next_htlc_id,u64,
 tlvdata,payload,remote_ctx,current_per_commitment_point,point,
 tlvdata,payload,remote_ctx,next_per_commitment_point,point,
 tlvdata,payload,remote_ctx,current_commitment_signature,signature,
@@ -66,6 +67,7 @@ tlvdata,payload,local_config,announcement_bitcoin_sig,signature,
 tlvdata,payload,local_config,upfront_shutdown_script,byte,...
 tlvtype,payload,local_ctx,28
 tlvdata,payload,local_ctx,ctn,u64,
+tlvdata,payload,local_ctx,next_htlc_id,u64,
 tlvdata,payload,local_ctx,current_per_commitment_point,point,
 tlvdata,payload,local_ctx,next_per_commitment_point,point,
 tlvdata,payload,local_ctx,current_commitment_signature,signature,

@@ -74,6 +74,21 @@ from .crypto import sha256
 #    current_feerate, pending_feerate
 
 
+# next_htlc_id
+#
+#  A                   B
+#    ----add-------->
+#    ------CS-------> (consensus on local_next_htlc_id)
+#    <----rev--------
+#
+#    <---add---------
+#    <-----CS--------
+#    ----rev--------> (consensus on remote_next_htlc at the time CS was sent. Bob needs to save it)
+#
+#
+
+
+
 
 
 PEERBACKUP_VERSION = 0
@@ -192,10 +207,11 @@ class PeerBackup:
     funding_outpoint = attr.ib(default=None, type=str)
     local_config = attr.ib(default=None, type=str)
     remote_config = attr.ib(default=None, type=str)
-    local_ctn = attr.ib(default=None, type=str)
-    remote_ctn = attr.ib(default=None, type=str)
+    local_ctn = attr.ib(default=None, type=int)
+    remote_ctn = attr.ib(default=None, type=int)
+    local_next_htlc_id = attr.ib(default=None, type=int)
+    remote_next_htlc_id = attr.ib(default=None, type=int)
     htlc_log = attr.ib(default=None, type=str)
-    fee_updates_log = attr.ib(default=None, type=str)
     revocation_store = attr.ib(default=None, type=str)
     local_history_hash = attr.ib(default=b'htlc_history'+bytes(20), type=bytes)
     remote_history_hash = attr.ib(default=b'htlc_history'+bytes(20), type=bytes)
@@ -270,6 +286,11 @@ class PeerBackup:
             current_feerate = last_feerate
             pending_feerate = None
 
+        # proposed by remote -> part of LOCAL ctx
+        remote_next_htlc_id = state['log']['-1']['next_htlc_id']
+        # proposed by local -> part of REMOTE ctx
+        local_next_htlc_id = chan.hm._local_next_htlc_id
+
         return PeerBackup(
             channel_id = state['channel_id'],
             node_id = state['node_id'],
@@ -280,6 +301,8 @@ class PeerBackup:
             remote_config = state['remote_config'],
             local_ctn = state['log']['1']['ctn'],
             remote_ctn = state['log']['-1']['ctn'],
+            local_next_htlc_id = local_next_htlc_id,
+            remote_next_htlc_id = remote_next_htlc_id,
             htlc_log = htlc_log,
             revocation_store = state['revocation_store'],
             current_feerate = current_feerate,
@@ -301,7 +324,6 @@ class PeerBackup:
             'local_ctn': p.local_ctn,
             'remote_ctn': p.remote_ctn,
             'htlc_log': p.htlc_log,
-            'fee_updates_log': p.fee_updates_log,
             'revocation_store': p.revocation_store,
             'local_history_hash': p.local_history_hash,
             'remote_history_hash': p.remote_history_hash,
@@ -310,7 +332,7 @@ class PeerBackup:
         }
 
     @classmethod
-    def convert_config_to_payload(self, config, ctn):
+    def convert_config_to_payload(self, config, ctn, next_htlc_id):
         a = {
             'htlc_basepoint': bytes.fromhex(config['htlc_basepoint']['pubkey']),
             'payment_basepoint': bytes.fromhex(config['payment_basepoint']['pubkey']),
@@ -330,6 +352,7 @@ class PeerBackup:
         }
         b = {
             'ctn': ctn,
+            'next_htlc_id': next_htlc_id,
             'current_per_commitment_point': bytes.fromhex(config['current_per_commitment_point']),
             'next_per_commitment_point': bytes.fromhex(config['next_per_commitment_point']),
             'current_commitment_signature': bytes.fromhex(config['current_commitment_signature']),
@@ -340,6 +363,7 @@ class PeerBackup:
     @classmethod
     def convert_payload_to_config(self, config, ctx):
         ctn = ctx['ctn']
+        next_htlc_id = ctx['next_htlc_id']
         config2 = {
             'htlc_basepoint': {'pubkey': config['htlc_basepoint'].hex()},
             'payment_basepoint': {'pubkey': config['payment_basepoint'].hex()},
@@ -367,7 +391,7 @@ class PeerBackup:
             announcement_bitcoin_sig = b''
         config2['announcement_node_sig'] = announcement_node_sig.hex()
         config2['announcement_bitcoin_sig'] = announcement_bitcoin_sig.hex()
-        return config2, ctn
+        return config2, ctn, next_htlc_id
 
     @classmethod
     def from_bytes(cls, peerbackup_bytes: bytes) -> 'PeerBackup':
@@ -405,15 +429,17 @@ class PeerBackup:
                 'buckets': buckets,
             }
         if 'remote_config' in payload:
-            a, b = cls.convert_payload_to_config(payload['remote_config'], payload['remote_ctx'])
-            state['remote_config'] = a
-            state['remote_ctn'] = b
+            config, ctn, next_htlc_id = cls.convert_payload_to_config(payload['remote_config'], payload['remote_ctx'])
+            state['remote_config'] = config
+            state['remote_ctn'] = ctn
+            state['local_next_htlc_id'] = next_htlc_id
             state['remote_config']['encrypted_seed'] = None
 
         if 'local_config' in payload:
-            a, b = cls.convert_payload_to_config(payload['local_config'], payload['local_ctx'])
-            state['local_config'] = a
-            state['local_ctn'] = b
+            config, ctn, next_htlc_id = cls.convert_payload_to_config(payload['local_config'], payload['local_ctx'])
+            state['local_config'] = config
+            state['local_ctn'] = ctn
+            state['remote_next_htlc_id'] = next_htlc_id
             if 'encrypted_seed' in payload:
                 state['local_config']['encrypted_seed'] = payload['encrypted_seed']['seed'].hex()
 
@@ -496,12 +522,12 @@ class PeerBackup:
                 'index': self.revocation_store['index'],
                 'buckets': buckets_bytes,
             }
-            a, b = self.convert_config_to_payload(self.remote_config, self.remote_ctn)
+            a, b = self.convert_config_to_payload(self.remote_config, self.remote_ctn, self.local_next_htlc_id)
             payload['remote_config'] = a
             payload['remote_config']['initial_msat'] = remote_initial_msat
             payload['remote_ctx'] = b
         if owner != REMOTE:
-            a, b = self.convert_config_to_payload(self.local_config, self.local_ctn)
+            a, b = self.convert_config_to_payload(self.local_config, self.local_ctn, self.remote_next_htlc_id)
             payload['local_config'] = a
             payload['local_config']['initial_msat'] = local_initial_msat
             payload['local_ctx'] = b
@@ -521,7 +547,6 @@ class PeerBackup:
     def merge_peerbackup_bytes(cls, local_peerbackup_bytes, remote_peerbackup_bytes):
         local_peerbackup = PeerBackup.from_bytes(local_peerbackup_bytes)
         remote_peerbackup = PeerBackup.from_bytes(remote_peerbackup_bytes)
-        print('current_feerate', local_peerbackup.current_feerate, remote_peerbackup.current_feerate)
         #
         local_peerbackup.revocation_store = remote_peerbackup.revocation_store
         #
@@ -530,6 +555,10 @@ class PeerBackup:
         #
         remote_peerbackup.local_ctn = local_peerbackup.local_ctn
         local_peerbackup.remote_ctn = remote_peerbackup.remote_ctn
+        #
+        remote_peerbackup.remote_next_htlc_id = local_peerbackup.remote_next_htlc_id
+        local_peerbackup.local_next_htlc_id = remote_peerbackup.local_next_htlc_id
+        print('next_htlc_id', local_peerbackup.local_next_htlc_id, remote_peerbackup.remote_next_htlc_id)
         #
         remote_peerbackup.local_history_hash = local_peerbackup.local_history_hash
         local_peerbackup.remote_history_hash = remote_peerbackup.remote_history_hash
@@ -568,9 +597,9 @@ class PeerBackup:
         self.remote_ctn = self.local_ctn
         self.local_ctn = x
 
-        #x = self.remote_feerate
-        #self.remote_feerate = self.local_feerate
-        #self.local_feerate = x
+        x = self.remote_next_htlc_id
+        self.remote_next_htlc_id = self.local_next_htlc_id
+        self.local_next_htlc_id = x
 
         x = self.remote_config
         self.remote_config = self.local_config
@@ -586,6 +615,7 @@ class PeerBackup:
     def recreate_channel_state(self, lnworker) -> dict:
         """ returns a json compatible with channel storage """
         state = self.to_json()
+        state.pop('revocation_store')
         local_config = state['local_config']
         encrypted_seed = bytes.fromhex(local_config.pop('encrypted_seed'))
         channel_seed = lnworker.decrypt_channel_seed(encrypted_seed)
@@ -638,9 +668,8 @@ class PeerBackup:
         state['log']['1']['unacked_updates'] = {}
         # restore next_htlc_id
         log = state['log']
-        for owner in ['-1', '1']:
-            htlc_ids = [int(x) for x in log[owner]['locked_in'].keys()]
-            log[owner]['next_htlc_id'] = max(htlc_ids) + 1 if htlc_ids else 0
+        log['1']['next_htlc_id'] = self.local_next_htlc_id
+        log['-1']['next_htlc_id'] = self.remote_next_htlc_id
         # set revack_pending
         log['1']['revack_pending'] = False
         log['-1']['revack_pending'] = True
@@ -650,6 +679,8 @@ class PeerBackup:
         state['data_loss_protect_remote_pcp'] = {}
         state['revocation_store'] = self.revocation_store
         state['remote_revocation_store'] = self.get_their_revocation_store(bytes.fromhex(local_config['per_commitment_secret_seed']), local_ctn)
+
+        lnworker.logger.info(f'recreating {state}')
         return state
 
     def get_their_revocation_store(self, seed, ctn):

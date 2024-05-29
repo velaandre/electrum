@@ -1449,9 +1449,10 @@ class Peer(Logger):
             self.logger.info(f'resend_revoke_and_ack {chan.hm.ctn_latest(LOCAL)} {chan.hm.ctn_latest(REMOTE)}')
             self.logger.info(f'{chan.hm.is_revack_pending(LOCAL),  chan.hm.is_revack_pending(REMOTE)}')
 
+            x = chan.hm.log[REMOTE]['revack_pending']
             chan.hm.log[REMOTE]['revack_pending'] = was_revoke_last
             self.add_peerbackup_tlvs(chan, revoke_and_ack_tlvs, LOCAL)
-            chan.hm.log[REMOTE]['revack_pending'] = True
+            chan.hm.log[REMOTE]['revack_pending'] = x
             self.send_message(
                 "revoke_and_ack",
                 channel_id=chan.channel_id,
