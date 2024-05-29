@@ -4,6 +4,7 @@ import threading
 
 from .lnutil import SENT, RECEIVED, LOCAL, REMOTE, HTLCOwner, UpdateAddHtlc, Direction, FeeUpdate
 from .util import bfh, with_lock
+from .crypto import sha256
 
 if TYPE_CHECKING:
     from .json_db import StoredDict
@@ -17,6 +18,7 @@ LOG_TEMPLATE = {
     'revack_pending': False,
     'next_htlc_id': 0,
     'ctn': -1,               # oldest unrevoked ctx of sub
+    'history_hash': sha256('history_hash').hex(),
 }
 
 class HTLCManager:

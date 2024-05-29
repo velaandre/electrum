@@ -213,8 +213,8 @@ class PeerBackup:
     remote_next_htlc_id = attr.ib(default=None, type=int)
     htlc_log = attr.ib(default=None, type=str)
     revocation_store = attr.ib(default=None, type=str)
-    local_history_hash = attr.ib(default=b'htlc_history'+bytes(20), type=bytes)
-    remote_history_hash = attr.ib(default=b'htlc_history'+bytes(20), type=bytes)
+    local_history_hash = attr.ib(default=None, type=bytes)
+    remote_history_hash = attr.ib(default=None, type=bytes)
     current_feerate = attr.ib(type=int, default=None)
     pending_feerate = attr.ib(type=int, default=None)
 
@@ -301,6 +301,8 @@ class PeerBackup:
             remote_config = state['remote_config'],
             local_ctn = state['log']['1']['ctn'],
             remote_ctn = state['log']['-1']['ctn'],
+            local_history_hash = bytes.fromhex(state['log']['1']['history_hash']),
+            remote_history_hash = bytes.fromhex(state['log']['-1']['history_hash']),
             local_next_htlc_id = local_next_htlc_id,
             remote_next_htlc_id = remote_next_htlc_id,
             htlc_log = htlc_log,
@@ -464,7 +466,7 @@ class PeerBackup:
         remote_initial_msat = self.remote_config['initial_msat']
         htlc_log_bytes = b''
         for proposer in [LOCAL, REMOTE]:
-            for htlc_id, htlc_update in list(self.htlc_log[proposer].items()):
+            for htlc_id, htlc_update in list(sorted(self.htlc_log[proposer].items())):
                 _bytes = htlc_update.to_bytes(proposer, owner, blank_timestamps)
                 if _bytes is None:
                     continue
@@ -673,6 +675,9 @@ class PeerBackup:
         # set revack_pending
         log['1']['revack_pending'] = False
         log['-1']['revack_pending'] = True
+        #
+        log['1']['history_hash'] = self.local_history_hash.hex()
+        log['-1']['history_hash'] = self.remote_history_hash.hex()
         # assume OPEN
         state['state'] = 'OPEN'
         state['short_channel_id'] = None
