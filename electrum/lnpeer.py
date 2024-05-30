@@ -1186,6 +1186,18 @@ class Peer(Logger):
             self.logger.info(f"tried to force-close channel {chan.get_id_for_log()} "
                              f"but close option is not allowed. {chan.get_state()=!r}")
 
+    def recreate_channel(self, peerbackup):
+        self.logger.info('recreating channel')
+        peerbackup = PeerBackup.from_bytes(peerbackup['state'])
+        channel_state = peerbackup.recreate_channel_state(self.lnworker)
+        channel_id = channel_state["channel_id"]
+        channels = self.lnworker.db.get_dict("channels")
+        channels[channel_id] = channel_state  # this converts dict to StoredDict
+        storage = channels[channel_id]
+        chan = Channel(storage, lnworker=self.lnworker)
+        self.lnworker.add_new_channel(chan)
+        return chan
+
     async def on_channel_reestablish(self, chan: Channel, msg):
         # Note: it is critical for this message handler to block processing of further messages,
         #       until this msg is processed. If we are behind (lost state), and send chan_reest to the remote,
@@ -1195,30 +1207,20 @@ class Peer(Logger):
         their_oldest_unrevoked_remote_ctn = msg["next_revocation_number"]
         their_local_pcp = msg.get("my_current_per_commitment_point")
         their_claim_of_our_last_per_commitment_secret = msg.get("your_last_per_commitment_secret")
-
         self.logger.info(
             f'channel_reestablish ({chan.get_id_for_log() if chan else ""}): received channel_reestablish with '
             f'(their_next_local_ctn={their_next_local_ctn}, '
-            f'their_oldest_unrevoked_remote_ctn={their_oldest_unrevoked_remote_ctn},')
+            f'their_oldest_unrevoked_remote_ctn={their_oldest_unrevoked_remote_ctn})')
 
         if self.is_peerbackup_client():
             peerbackup = msg['channel_reestablish_tlvs'].get('peerbackup')
-            if peerbackup:
-                # todo: verify_peerbackup_signature if chan is None
-                self.logger.info('recreating channel')
-                peerbackup = PeerBackup.from_bytes(peerbackup['state'])
-                channel_state = peerbackup.recreate_channel_state(self.lnworker)
-                # chan can be None, see maybe_resuming
-                if not chan:
-                    channel_id = channel_state["channel_id"]
-                    channels = self.lnworker.db.get_dict("channels")
-                    # this converts dict to StoredDict
-                    channels[channel_id] = channel_state
-                    storage = channels[channel_id]
-                    chan = Channel(storage, lnworker=self.lnworker)
-                    self.lnworker.add_new_channel(chan)
-            #else:
-            #    raise RemoteMisbehaving(f"channel reestablish: peerbackup missing")
+            # todo: verify_peerbackup_signature in all cases
+        else:
+            peerbackup = None
+            # raise RemoteMisbehaving(f"channel reestablish: peerbackup missing")
+
+        if chan is None and peerbackup:
+            chan = self.recreate_channel(peerbackup)
 
         # sanity checks of received values
         if their_next_local_ctn < 0:
@@ -1286,17 +1288,22 @@ class Peer(Logger):
             raise RemoteMisbehaving("channel_reestablish: data loss protect fields invalid")
         fut = self.channel_reestablish_msg[chan.channel_id]
         if they_are_ahead:
-            self.logger.warning(
-                f"channel_reestablish ({chan.get_id_for_log()}): "
-                f"remote is ahead of us! They should force-close. Remote PCP: {their_local_pcp.hex()}")
-            # data_loss_protect_remote_pcp is used in lnsweep
-            chan.set_data_loss_protect_remote_pcp(their_next_local_ctn - 1, their_local_pcp)
-            chan.set_state(ChannelState.WE_ARE_TOXIC)
-            self.lnworker.save_channel(chan)
-            chan.peer_state = PeerState.BAD
-            # raise after we send channel_reestablish, so the remote can realize they are ahead
-            # FIXME what if we have multiple chans with peer? timing...
-            fut.set_exception(GracefulDisconnect("remote ahead of us"))
+            if not peerbackup:
+                self.logger.warning(
+                    f"channel_reestablish ({chan.get_id_for_log()}): "
+                    f"remote is ahead of us! They should force-close. Remote PCP: {their_local_pcp.hex()}")
+                # data_loss_protect_remote_pcp is used in lnsweep
+                chan.set_data_loss_protect_remote_pcp(their_next_local_ctn - 1, their_local_pcp)
+                chan.set_state(ChannelState.WE_ARE_TOXIC)
+                self.lnworker.save_channel(chan)
+                chan.peer_state = PeerState.BAD
+                # raise after we send channel_reestablish, so the remote can realize they are ahead
+                # FIXME what if we have multiple chans with peer? timing...
+                fut.set_exception(GracefulDisconnect("remote ahead of us"))
+            else:
+                chan = self.recreate_channel(peerbackup)
+                we_must_resend_revoke_and_ack = False
+                fut.set_result((we_must_resend_revoke_and_ack, their_next_local_ctn))
         elif we_are_ahead:
             self.logger.warning(f"channel_reestablish ({chan.get_id_for_log()}): we are ahead of remote! trying to force-close.")
             self.schedule_force_closing(chan.channel_id)
@@ -1412,12 +1419,12 @@ class Peer(Logger):
         # client must not send first
         if self.is_peerbackup_client() and not self.is_peerbackup_server():
             await fut
+            # reset chan in case we recreated it
+            chan = self.lnworker.get_channel_by_id(chan_id)
         self._send_channel_reestablish(chan)
         # wait until we receive their channel_reestablish
         await fut
         we_must_resend_revoke_and_ack, their_next_local_ctn = fut.result()
-
-        self.logger.info(f'we must send revack {we_must_resend_revoke_and_ack}')
 
         def replay_updates_and_commitsig():
             # Replay un-acked local updates (including commitment_signed) byte-for-byte.

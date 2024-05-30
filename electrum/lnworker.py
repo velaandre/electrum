@@ -1362,7 +1362,8 @@ class LNWallet(LNWorker):
     def add_channel(self, chan: Channel):
         with self.lock:
             self._channels[chan.channel_id] = chan
-        self.lnwatcher.add_channel(chan.funding_outpoint.to_str(), chan.get_funding_address())
+        if self.lnwatcher:
+            self.lnwatcher.add_channel(chan.funding_outpoint.to_str(), chan.get_funding_address())
 
     def add_new_channel(self, chan: Channel):
         self.add_channel(chan)
