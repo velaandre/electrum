@@ -54,7 +54,7 @@ from .json_db import StoredDict
 from .invoices import PR_PAID
 from .simple_config import FEE_LN_ETA_TARGET, FEERATE_PER_KW_MIN_RELAY_LIGHTNING
 from .trampoline import decode_routing_info
-from .peerbackup import PeerBackup
+from .peerbackup import PeerBackup, PEERBACKUP_VERSION
 
 if TYPE_CHECKING:
     from .lnworker import LNGossip, LNWallet
@@ -172,8 +172,8 @@ class Peer(Logger):
             "init", gflen=0, flen=flen,
             features=features,
             init_tlvs={
-                'networks':
-                {'chains': constants.net.rev_genesis_bytes()}
+                'networks': {'chains': constants.net.rev_genesis_bytes()},
+                'peerbackup_version': {'version': PEERBACKUP_VERSION},
             })
         self._sent_init = True
         self.maybe_set_initialized()
@@ -382,6 +382,12 @@ class Peer(Logger):
             their_chains = list(chunks(their_networks["chains"], 32))
             if constants.net.rev_genesis_bytes() not in their_chains:
                 raise GracefulDisconnect(f"no common chain found with remote. (they sent: {their_chains})")
+        # check we agree on peerbackup version
+        peerbackup_version = payload["init_tlvs"].get("peerbackup_version")
+        if peerbackup_version:
+            version = peerbackup_version['version']
+            if version != PEERBACKUP_VERSION:
+                raise GracefulDisconnect(f"peerbackup version")
         # all checks passed
         self.lnworker.on_peer_successfully_established(self)
         self._received_init = True
@@ -1643,7 +1649,7 @@ class Peer(Logger):
     def add_peerbackup_tlvs(self, chan, tlvs, owner):
         if self.is_peerbackup_client():
             peerbackup_signature = chan.get_our_peerbackup_signature(owner)
-            tlvs['peerbackup'] = {'signature': peerbackup_signature}
+            tlvs['peerbackup_signature'] = {'signature': peerbackup_signature}
         if self.is_peerbackup_server():
             ctn, timestamp, signature = chan.get_time_commitment(-owner)
             tlvs['time_commitment'] = {
@@ -1827,7 +1833,7 @@ class Peer(Logger):
         htlc_sigs = list(chunks(data, 64))
         chan.receive_new_commitment(payload["signature"], htlc_sigs)
         if self.is_peerbackup_server():
-            peerbackup_sig = payload['commitment_signed_tlvs']['peerbackup']['signature']
+            peerbackup_sig = payload['commitment_signed_tlvs']['peerbackup_signature']['signature']
             chan.receive_new_peerbackup(peerbackup_sig, REMOTE)
         if self.is_peerbackup_client():
             tc = payload['commitment_signed_tlvs']['time_commitment']
@@ -2380,7 +2386,7 @@ class Peer(Logger):
         rev = RevokeAndAck(payload["per_commitment_secret"], payload["next_per_commitment_point"])
         chan.receive_revocation(rev)
         if self.is_peerbackup_server():
-            peerbackup_sig = payload['revoke_and_ack_tlvs']['peerbackup']['signature']
+            peerbackup_sig = payload['revoke_and_ack_tlvs']['peerbackup_signature']['signature']
             chan.receive_new_peerbackup(peerbackup_sig, LOCAL)
         if self.is_peerbackup_client():
             tc = payload['revoke_and_ack_tlvs']['time_commitment']
