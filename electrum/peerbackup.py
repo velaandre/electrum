@@ -349,8 +349,6 @@ class PeerBackup:
             'htlc_minimum_msat': config['htlc_minimum_msat'],
             'max_accepted_htlcs': config['max_accepted_htlcs'],
             'upfront_shutdown_script': bytes.fromhex(config['upfront_shutdown_script']),
-            'announcement_node_sig': bytes.fromhex(config['announcement_node_sig']) or bytes(64),
-            'announcement_bitcoin_sig': bytes.fromhex(config['announcement_bitcoin_sig']) or bytes(64),
         }
         b = {
             'ctn': ctn,
@@ -385,14 +383,8 @@ class PeerBackup:
             'current_commitment_signature': ctx['current_commitment_signature'].hex(),
             'current_htlc_signatures': ctx['current_htlc_signatures'].hex(),
         }
-        announcement_node_sig = config['announcement_node_sig']
-        announcement_bitcoin_sig = config['announcement_bitcoin_sig']
-        if announcement_node_sig == bytes(64):
-            announcement_node_sig = b''
-        if announcement_bitcoin_sig == bytes(64):
-            announcement_bitcoin_sig = b''
-        config2['announcement_node_sig'] = announcement_node_sig.hex()
-        config2['announcement_bitcoin_sig'] = announcement_bitcoin_sig.hex()
+        config2['announcement_node_sig'] = ''
+        config2['announcement_bitcoin_sig'] = ''
         return config2, ctn, next_htlc_id
 
     @classmethod

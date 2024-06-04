@@ -39,8 +39,6 @@ tlvdata,payload,remote_config,reserve_sat,u64,
 tlvdata,payload,remote_config,initial_msat,u64,
 tlvdata,payload,remote_config,htlc_minimum_msat,u64,
 tlvdata,payload,remote_config,max_accepted_htlcs,u16,
-tlvdata,payload,remote_config,announcement_node_sig,signature,
-tlvdata,payload,remote_config,announcement_bitcoin_sig,signature,
 tlvdata,payload,remote_config,upfront_shutdown_script,byte,...
 tlvtype,payload,remote_ctx,24
 tlvdata,payload,remote_ctx,ctn,u64,
@@ -62,8 +60,6 @@ tlvdata,payload,local_config,reserve_sat,u64,
 tlvdata,payload,local_config,initial_msat,u64,
 tlvdata,payload,local_config,htlc_minimum_msat,u64,
 tlvdata,payload,local_config,max_accepted_htlcs,u16,
-tlvdata,payload,local_config,announcement_node_sig,signature,
-tlvdata,payload,local_config,announcement_bitcoin_sig,signature,
 tlvdata,payload,local_config,upfront_shutdown_script,byte,...
 tlvtype,payload,local_ctx,28
 tlvdata,payload,local_ctx,ctn,u64,
