@@ -55,6 +55,7 @@ from .invoices import PR_PAID
 from .simple_config import FEE_LN_ETA_TARGET, FEERATE_PER_KW_MIN_RELAY_LIGHTNING
 from .trampoline import decode_routing_info
 from .peerbackup import PeerBackup, PEERBACKUP_VERSION
+from .lnhtlc import INITIAL_HISTORY_HASH
 
 if TYPE_CHECKING:
     from .lnworker import LNGossip, LNWallet
@@ -103,6 +104,7 @@ class Peer(Logger):
         self.last_message_time = 0
         self.pong_event = asyncio.Event()
         self.reply_channel_range = asyncio.Queue()
+        self.reply_htlc_history = defaultdict(asyncio.Queue)
         # gossip uses a single queue to preserve message order
         self.gossip_queue = asyncio.Queue()
         self.ordered_message_queues = defaultdict(asyncio.Queue)  # type: Dict[bytes, asyncio.Queue] # for messages that are ordered
@@ -467,6 +469,7 @@ class Peer(Logger):
             await group.spawn(self.query_gossip())
             await group.spawn(self.process_gossip())
             await group.spawn(self.send_own_gossip())
+            await group.spawn(self.sync_htlc_history())
 
     async def process_gossip(self):
         while True:
@@ -523,6 +526,59 @@ class Peer(Logger):
                     await asyncio.sleep(1)
                     continue
                 await self.get_short_channel_ids(todo)
+
+    def query_htlc_history(self, chan, last_hash):
+        self.send_message(
+            'query_htlc_history',
+            channel_id=chan.channel_id,
+            last_index=0,
+            last_hash=last_hash)
+
+    def on_query_htlc_history(self, chan, payload):
+        channel_id = payload['channel_id']
+        last_index = payload['last_index']
+        p = chan.get_their_peerbackup()
+        htlc_history = p.get_htlc_history()
+        local_first_hash = INITIAL_HISTORY_HASH
+        remote_first_hash = INITIAL_HISTORY_HASH
+        self.send_message(
+            'reply_htlc_history',
+            channel_id=channel_id,
+            local_first_hash=local_first_hash,
+            remote_first_hash=remote_first_hash,
+            reply_htlc_history_tlvs={'htlc_history':{'htlc_history':htlc_history}},
+        )
+
+    def on_reply_htlc_history(self, chan, payload):
+        self.reply_htlc_history[chan.channel_id].put_nowait(payload)
+
+    async def sync_htlc_history(self):
+        # query backward, so that we can attach to the current hash
+        # todo: we need to know their initial hash (they might have lost some)
+        await self.initialized
+        while True:
+            await asyncio.sleep(1)
+            for chan in self.channels.values():
+                if chan.hm.get_history_hash(LOCAL) == INITIAL_HISTORY_HASH:
+                    continue
+                if chan.get_state() != ChannelState.OPEN:
+                    continue
+                self.query_htlc_history(chan, chan.hm.get_history_hash(LOCAL))
+                response = await self.reply_htlc_history[chan.channel_id].get()
+                local_first_hash = response['local_first_hash']
+                remote_first_hash = response['remote_first_hash']
+                htlc_history = response['reply_htlc_history_tlvs']['htlc_history']['htlc_history']
+                local_delta, remote_delta = chan.hm.update_htlc_history(
+                    local_first_hash,
+                    remote_first_hash,
+                    htlc_history,
+                )
+                chan.config[LOCAL].initial_msat -= local_delta
+                chan.config[REMOTE].initial_msat -= remote_delta
+                self.logger.info(f'htlc history synchronized for {chan.get_id_for_log()}')
+                util.trigger_callback('wallet_updated', self.lnworker.wallet)
+                util.trigger_callback('channels_updated', self.lnworker.wallet)
+
 
     async def get_channel_range(self):
         first_block = constants.net.BLOCK_HEIGHT_FIRST_LIGHTNING_CHANNELS

@@ -256,3 +256,14 @@ msgtype,gossip_timestamp_filter,265
 msgdata,gossip_timestamp_filter,chain_hash,chain_hash,
 msgdata,gossip_timestamp_filter,first_timestamp,u32,
 msgdata,gossip_timestamp_filter,timestamp_range,u32,
+msgtype,query_htlc_history,35009
+msgdata,query_htlc_history,channel_id,channel_id,
+msgdata,query_htlc_history,last_index,u32,
+msgdata,query_htlc_history,last_hash,sha256,
+msgtype,reply_htlc_history,35010
+msgdata,reply_htlc_history,channel_id,channel_id,
+msgdata,reply_htlc_history,local_first_hash,sha256,
+msgdata,reply_htlc_history,remote_first_hash,sha256,
+msgdata,reply_htlc_history,tlvs,reply_htlc_history_tlvs,
+tlvtype,reply_htlc_history_tlvs,htlc_history,1
+tlvdata,reply_htlc_history_tlvs,htlc_history,htlc_history,byte,...

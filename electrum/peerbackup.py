@@ -458,13 +458,39 @@ class PeerBackup:
 
         return PeerBackup(**state)
 
+    @classmethod
+    def htlc_log_from_bytes(cls, local_first_hash, remote_first_hash, htlc_log_bytes):
+        htlc_log = {LOCAL:{}, REMOTE:{}}
+        local_history_hash = local_first_hash
+        remote_history_hash = remote_first_hash
+        local_delta_msat = 0
+        remote_delta_msat = 0
 
-    def to_bytes(self, owner=None, blank_timestamps=False) -> bytes:
+        while htlc_log_bytes:
+            chunk = htlc_log_bytes[0:90]
+            htlc_log_bytes = htlc_log_bytes[90:]
+            proposer, htlc_update = HtlcUpdate.from_bytes(chunk)
+            htlc_log[proposer][htlc_update.htlc_id] = htlc_update
+
+            if htlc_update.local_ctn_in is not None and htlc_update.local_ctn_out is not None:
+                _bytes2 = htlc_update.to_bytes(proposer, LOCAL, blank_timestamps=True)
+                local_history_hash = sha256(local_history_hash + _bytes2)
+                local_delta_msat -= htlc_update.amount_msat * int(proposer)
+
+            if htlc_update.remote_ctn_in is not None and htlc_update.remote_ctn_out is not None:
+                _bytes2 = htlc_update.to_bytes(proposer, REMOTE, blank_timestamps=True)
+                remote_history_hash = sha256(remote_history_hash + _bytes2)
+                remote_delta_msat += htlc_update.amount_msat * int(proposer)
+
+        return htlc_log, local_history_hash, remote_history_hash, local_delta_msat, remote_delta_msat
+
+    def _get_htlc_log(self, owner=None, blank_timestamps=False) -> bytes:
         local_history_hash = self.local_history_hash
         remote_history_hash = self.remote_history_hash
         local_initial_msat = self.local_config['initial_msat']
         remote_initial_msat = self.remote_config['initial_msat']
         htlc_log_bytes = b''
+        htlc_history = b''
         for proposer in [LOCAL, REMOTE]:
             for htlc_id, htlc_update in list(sorted(self.htlc_log[proposer].items())):
                 _bytes = htlc_update.to_bytes(proposer, owner, blank_timestamps)
@@ -488,6 +514,33 @@ class PeerBackup:
                 if (remote_ctn_in is not None and remote_ctn_out is None)\
                    or (local_ctn_in is not None and local_ctn_out is None):
                     htlc_log_bytes += _bytes
+                else:
+                    htlc_history += _bytes
+        return (
+            local_history_hash,
+            remote_history_hash,
+            local_initial_msat,
+            remote_initial_msat,
+            htlc_log_bytes,
+            htlc_history
+        )
+
+    def get_htlc_history(self):
+        local_history_hash,\
+        remote_history_hash,\
+        local_initial_msat,\
+        remote_initial_msat,\
+        htlc_log_bytes,\
+        htlc_history = self._get_htlc_log(owner=None, blank_timestamps=False)
+        return htlc_history
+
+    def to_bytes(self, owner=None, blank_timestamps=False) -> bytes:
+        local_history_hash,\
+        remote_history_hash,\
+        local_initial_msat,\
+        remote_initial_msat,\
+        htlc_log_bytes,\
+        htlc_history = self._get_htlc_log(owner, blank_timestamps)
 
         if owner == LOCAL:
             remote_history_hash = bytes(32)

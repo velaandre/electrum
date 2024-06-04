@@ -9,6 +9,8 @@ from .crypto import sha256
 if TYPE_CHECKING:
     from .json_db import StoredDict
 
+INITIAL_HISTORY_HASH = sha256('history_hash')
+
 LOG_TEMPLATE = {
     'adds': {},              # "side who offered htlc" -> htlc_id -> htlc
     'locked_in': {},         # "side who offered htlc" -> action -> htlc_id -> whose ctx -> ctn
@@ -18,7 +20,8 @@ LOG_TEMPLATE = {
     'revack_pending': False,
     'next_htlc_id': 0,
     'ctn': -1,               # oldest unrevoked ctx of sub
-    'history_hash': sha256('history_hash').hex(),
+    'history_hash': INITIAL_HISTORY_HASH.hex(),
+    #'initial_msat': 0,
 }
 
 class HTLCManager:
@@ -48,6 +51,32 @@ class HTLCManager:
         self._is_local_ctn_reached = self.is_local_ctn_reached()
         self._local_next_htlc_id = self.get_next_htlc_id(LOCAL)
         self._remote_next_htlc_id = self.get_next_htlc_id(REMOTE)
+
+    def get_history_hash(self, owner):
+        return bytes.fromhex(self.log[owner]['history_hash'])
+
+    def update_htlc_history(self, local_first_hash, remote_first_hash, history_bytes):
+        from .peerbackup import PeerBackup
+        log, local_history_hash, remote_history_hash, local_delta_msat, remote_delta_msat = PeerBackup.htlc_log_from_bytes(local_first_hash, remote_first_hash, history_bytes)
+        assert local_history_hash.hex() == self.log[LOCAL]['history_hash']
+        assert remote_history_hash.hex() == self.log[REMOTE]['history_hash']
+        for proposer in [LOCAL, REMOTE]:
+            target_log = self.log[proposer]
+            for htlc_id, v in log[proposer].items():
+                target_log['adds'][htlc_id] = UpdateAddHtlc(
+                    amount_msat = v.amount_msat,
+                    payment_hash = v.payment_hash,
+                    cltv_abs = v.cltv_abs,
+                    htlc_id = v.htlc_id,
+                    timestamp = v.timestamp)
+                assert (v.local_ctn_in is not None or v.remote_ctn_in is not None), v
+                target_log['locked_in'][htlc_id] = {LOCAL:v.local_ctn_in, REMOTE:v.remote_ctn_in}
+                if v.local_ctn_out is not None or v.remote_ctn_out is not None:
+                    target_log['settles' if v.is_success else 'fails'][htlc_id] = {LOCAL:v.local_ctn_out, REMOTE:v.remote_ctn_out}
+        self.log[LOCAL]['history_hash'] = local_first_hash.hex()
+        self.log[REMOTE]['history_hash'] = remote_first_hash.hex()
+        self._init_maybe_active_htlc_ids()
+        return local_delta_msat, remote_delta_msat
 
     def is_local_ctn_reached(self):
         # detect whether local ctn is reached in log values
