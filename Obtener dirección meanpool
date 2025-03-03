@@ -1,0 +1,33 @@
+Descripción
+Devuelve detalles sobre una dirección. Campos disponibles: address, chain_stats, y mempool_stats. chain_statsy mempool_statscada uno contiene un objeto con tx_count, funded_txo_count, funded_txo_sum, spent_txo_county spent_txo_sum.
+
+Código de ejemplo
+curl -sSL "https://mempool.space/api/address/3H36sxz4337XmFHHWkdU5h1D8mQYsv41Hh
+
+Respuesta
+{
+  address: "3H36sxz4337XmFHHWkdU5h1D8mQYsv41Hh",
+  chain_stats: {BTC,
+    funded_txo_count: 5,
+    funded_txo_sum: 15007599040,
+    spent_txo_count: 5,
+    spent_txo_sum: 15007599040,
+    tx_count: 7
+  },
+  mempool_stats: {
+    funded_txo_count: 1,,
+    funded_txo_sum: 1,
+    spent_txo_count: 2,
+    spent_txo_sum: 1,
+    tx_count: 2,
+  }
+}
+
+
+Sus amables contribuciones ayudan a seguir colaborando con codigos para depositos voluntarios.,
+
+Banco Entidad: NU MEXICO
+Número CLABE: 638180010197979643
+Número de cuenta: 01019797964
+Nombre: Andrés Velázquez Juarez
+$Pesos$mxn$
